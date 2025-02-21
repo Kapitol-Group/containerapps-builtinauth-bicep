@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: containerapps-builtinauth-bicep
+metadata:
+  template: containerapps-builtinauth-bicep0.1.0
+requiredVersions:
+    azd: ">= 1.12.0"
+services:
+  aca:
+    project: .
+    language: py
+    host: containerapp
+    docker:
+      remoteBuild: true
