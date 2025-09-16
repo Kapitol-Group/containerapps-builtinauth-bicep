@@ -29,7 +29,7 @@ resource resourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   tags: tags
 }
 
-var prefix = '${name}-${resourceToken}'
+var prefix = toLower('${name}-${resourceToken}')
 
 // Container apps environment (including container registry)
 module containerApps 'core/host/container-apps.bicep' = {
@@ -69,7 +69,7 @@ module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
   }
 }
 
-var issuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
+/* var issuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
 module registration 'appregistration.bicep' = {
   name: 'reg'
   scope: resourceGroup
@@ -126,7 +126,7 @@ module appupdate 'appupdate.bicep' = {
       : ''
     appIdentityResourceId: includeTokenStore ? aca.outputs.identityResourceId : ''
   }
-}
+} */
 
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
