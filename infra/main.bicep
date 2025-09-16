@@ -24,13 +24,12 @@ var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' = {
-  name: '${name}-rg'
+  name: 'RG-${name}'
   location: location
   tags: tags
 }
 
 var prefix = '${name}-${resourceToken}'
-
 
 // Container apps environment (including container registry)
 module containerApps 'core/host/container-apps.bicep' = {
@@ -70,7 +69,6 @@ module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
   }
 }
 
-
 var issuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
 module registration 'appregistration.bicep' = {
   name: 'reg'
@@ -84,7 +82,6 @@ module registration 'appregistration.bicep' = {
     serviceManagementReference: serviceManagementReference
   }
 }
-
 
 module storage 'br/public:avm/res/storage/storage-account:0.9.1' = if (includeTokenStore) {
   name: 'storage'
@@ -124,11 +121,12 @@ module appupdate 'appupdate.bicep' = {
     clientId: registration.outputs.clientAppId
     openIdIssuer: issuer
     includeTokenStore: includeTokenStore
-    blobContainerUri: includeTokenStore ? 'https://${storage.outputs.name}.blob.${environment().suffixes.storage}/${tokenStorageContainerName}' : ''
+    blobContainerUri: includeTokenStore
+      ? 'https://${storage.outputs.name}.blob.${environment().suffixes.storage}/${tokenStorageContainerName}'
+      : ''
     appIdentityResourceId: includeTokenStore ? aca.outputs.identityResourceId : ''
   }
 }
-
 
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
