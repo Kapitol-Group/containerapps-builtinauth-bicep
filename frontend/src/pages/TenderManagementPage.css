@@ -1,0 +1,85 @@
+.tender-management-page {
+    min-height: 100vh;
+    background-color: #f5f5f5;
+}
+
+.page-header {
+    background: white;
+    padding: 1.5rem 2rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.back-btn {
+    background: none;
+    border: none;
+    font-size: 1rem;
+    cursor: pointer;
+    color: #007bff;
+}
+
+.page-header h1 {
+    flex: 1;
+    margin: 0;
+    font-size: 1.5rem;
+}
+
+.page-content {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.file-workspace {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.file-browser,
+.file-preview {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.file-browser h3,
+.file-preview h3 {
+    margin-top: 0;
+}
+
+.file-list {
+    margin-top: 1rem;
+}
+
+.file-item {
+    padding: 0.75rem;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.file-item:hover {
+    background-color: #f5f5f5;
+}
+
+.file-item.selected {
+    background-color: #e7f3ff;
+    border-color: #007bff;
+}
+
+.file-category {
+    font-size: 0.85rem;
+    color: #666;
+    background: #f0f0f0;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+}

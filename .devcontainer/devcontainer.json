@@ -1,11 +1,10 @@
 // For format details, see https://aka.ms/devcontainer.json.
 {
-	"name": "simple-flask-server-example",
+	"name": "kapitol-tender-automation",
 	"image": "mcr.microsoft.com/devcontainers/python:3.10-bullseye",
 	"features": {
 		"ghcr.io/azure/azure-dev/azd:latest": {}
 	},
-
 	// Configure tool-specific properties.
 	"customizations": {
 		// Add the IDs of extensions you want installed when the container is created.
@@ -17,7 +16,7 @@
 		// Configure properties specific to VS Code.
 		"vscode": {
 			// Set *default* container specific settings.json values on container create.
-			"settings": { 
+			"settings": {
 				"python.defaultInterpreterPath": "/usr/local/bin/python",
 				"python.linting.enabled": true,
 				"python.linting.pylintEnabled": true,
@@ -39,13 +38,13 @@
 			}
 		}
 	},
-
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	"forwardPorts": [8000, 8080],
-
+	"forwardPorts": [
+		8000,
+		8080
+	],
 	// Use 'postCreateCommand' to run commands after the container is created.
 	"postCreateCommand": "pip install -r requirements.txt",
-
 	// Comment out to connect as root instead. More info: https://aka.ms/vscode-remote/containers/non-root.
 	"remoteUser": "vscode"
 }

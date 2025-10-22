@@ -12,3 +12,5 @@ services:
     host: containerapp
     docker:
       remoteBuild: true
+      path: ./Dockerfile
+

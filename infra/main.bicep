@@ -45,6 +45,28 @@ module containerApps 'core/host/container-apps.bicep' = {
   }
 }
 
+module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
+  name: 'loganalytics'
+  scope: resourceGroup
+  params: {
+    name: '${prefix}-loganalytics'
+    location: location
+    tags: tags
+  }
+}
+
+// Storage account for tender documents (created first without role assignments)
+module storage 'core/storage/storage-account.bicep' = {
+  name: 'storage'
+  scope: resourceGroup
+  params: {
+    name: '${take(replace(prefix, '-', ''), 17)}storage'
+    location: location
+    tags: tags
+    isHnsEnabled: true
+  }
+}
+
 module aca 'aca.bicep' = {
   name: 'aca'
   scope: resourceGroup
@@ -56,60 +78,33 @@ module aca 'aca.bicep' = {
     containerAppsEnvironmentName: containerApps.outputs.environmentName
     containerRegistryName: containerApps.outputs.registryName
     exists: acaExists
+    storageAccountName: storage.outputs.name
+    uipathMockMode: 'true'
   }
 }
 
-module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
-  name: 'loganalytics'
+// Grant Storage Blob Data Contributor role to the ACA managed identity
+// This is done as a separate module to avoid circular dependencies
+module storageRoleAssignment 'core/storage/storage-role-assignment.bicep' = {
+  name: 'storage-role-assignment'
   scope: resourceGroup
   params: {
-    name: '${prefix}-loganalytics'
-    location: location
-    tags: tags
+    storageAccountName: storage.outputs.name
+    principalId: aca.outputs.identityPrincipalId
   }
 }
 
-/* var issuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
+var issuer = '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
 module registration 'appregistration.bicep' = {
   name: 'reg'
   scope: resourceGroup
   params: {
     clientAppName: '${prefix}-entra-client-app'
-    clientAppDisplayName: 'Simple Flask Server Client App'
+    clientAppDisplayName: 'Tender Automation Client App'
     webAppEndpoint: aca.outputs.uri
     webAppIdentityId: aca.outputs.identityPrincipalId
     issuer: issuer
     serviceManagementReference: serviceManagementReference
-  }
-}
-
-module storage 'br/public:avm/res/storage/storage-account:0.9.1' = if (includeTokenStore) {
-  name: 'storage'
-  scope: resourceGroup
-  params: {
-    name: '${take(replace(prefix, '-', ''), 17)}storage'
-    location: location
-    tags: tags
-
-    kind: 'StorageV2'
-    skuName: 'Standard_LRS'
-    publicNetworkAccess: 'Enabled'
-    networkAcls: {
-      bypass: 'AzureServices'
-      defaultAction: 'Allow'
-    }
-    allowBlobPublicAccess: false
-    allowSharedKeyAccess: false
-    blobServices: {
-      deleteRetentionPolicyDays: 2
-      deleteRetentionPolicyEnabled: true
-      containers: [
-        {
-          name: tokenStorageContainerName
-          publicAccess: 'None'
-        }
-      ]
-    }
   }
 }
 
@@ -126,7 +121,7 @@ module appupdate 'appupdate.bicep' = {
       : ''
     appIdentityResourceId: includeTokenStore ? aca.outputs.identityResourceId : ''
   }
-} */
+}
 
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
@@ -139,3 +134,6 @@ output SERVICE_ACA_IMAGE_NAME string = aca.outputs.imageName
 output AZURE_CONTAINER_ENVIRONMENT_NAME string = containerApps.outputs.environmentName
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerApps.outputs.registryLoginServer
 output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
+
+output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
+output AZURE_STORAGE_ACCOUNT_ID string = storage.outputs.id

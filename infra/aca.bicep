@@ -8,11 +8,80 @@ param containerRegistryName string
 param serviceName string = 'aca'
 param exists bool
 
+// Environment variables for the backend
+param storageAccountName string = ''
+param uipathApiUrl string = ''
+param uipathApiKey string = ''
+param uipathTenantName string = ''
+param uipathFolderId string = ''
+param uipathMockMode string = 'true'
+
 resource acaIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
   location: location
 }
 
+// Build environment variables array conditionally
+var baseEnvVars = [
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: acaIdentity.properties.clientId
+  }
+  {
+    name: 'AZURE_STORAGE_ACCOUNT_NAME'
+    value: storageAccountName
+  }
+  {
+    name: 'AZURE_STORAGE_CONTAINER_NAME'
+    value: 'tender-documents'
+  }
+  {
+    name: 'UIPATH_API_URL'
+    value: uipathApiUrl
+  }
+  {
+    name: 'UIPATH_TENANT_NAME'
+    value: uipathTenantName
+  }
+  {
+    name: 'UIPATH_FOLDER_ID'
+    value: uipathFolderId
+  }
+  {
+    name: 'UIPATH_MOCK_MODE'
+    value: uipathMockMode
+  }
+]
+
+var uipathApiKeyEnvVar = !empty(uipathApiKey)
+  ? [
+      {
+        name: 'UIPATH_API_KEY'
+        secretRef: 'uipath-api-key'
+      }
+    ]
+  : []
+
+var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar)
+
+// Build secrets array conditionally
+var baseSecrets = [
+  {
+    name: 'override-use-mi-fic-assertion-client-id'
+    value: acaIdentity.properties.clientId
+  }
+]
+
+var uipathApiKeySecret = !empty(uipathApiKey)
+  ? [
+      {
+        name: 'uipath-api-key'
+        value: uipathApiKey
+      }
+    ]
+  : []
+
+var allSecrets = concat(baseSecrets, uipathApiKeySecret)
 
 module app 'core/host/container-app-upsert.bicep' = {
   name: '${serviceName}-container-app-module'
@@ -24,14 +93,9 @@ module app 'core/host/container-app-upsert.bicep' = {
     exists: exists
     containerAppsEnvironmentName: containerAppsEnvironmentName
     containerRegistryName: containerRegistryName
-    env: []
+    env: allEnvVars
     targetPort: 50505
-    secrets: [
-      {
-        name: 'override-use-mi-fic-assertion-client-id'
-        value: acaIdentity.properties.clientId
-      }
-    ]
+    secrets: allSecrets
   }
 }
 
