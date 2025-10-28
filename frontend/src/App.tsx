@@ -7,17 +7,18 @@ import { msalInstance, initializeMsal, useLogin } from './authConfig';
 import './App.css';
 
 function App() {
-  const [msalInitialized, setMsalInitialized] = useState(!useLogin);
+  const [msalInitialized, setMsalInitialized] = useState(false);
 
   useEffect(() => {
-    if (useLogin) {
-      initializeMsal()
-        .then(() => setMsalInitialized(true))
-        .catch((error) => {
-          console.error('Failed to initialize MSAL:', error);
-          setMsalInitialized(true); // Continue anyway
-        });
-    }
+    initializeMsal()
+      .then(() => {
+        setMsalInitialized(true);
+        console.log('MSAL initialized, login configured:', useLogin);
+      })
+      .catch((error) => {
+        console.error('Failed to initialize MSAL:', error);
+        setMsalInitialized(true); // Continue anyway
+      });
   }, []);
 
   if (!msalInitialized) {

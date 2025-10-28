@@ -28,7 +28,17 @@ export const tendersApi = {
         return response.data.data || [];
     },
 
-    create: async (data: { name: string; sharepoint_path?: string; output_location?: string }): Promise<Tender> => {
+    create: async (data: {
+        name: string;
+        sharepoint_path?: string;
+        output_location?: string;
+        sharepoint_site_id?: string;
+        sharepoint_library_id?: string;
+        sharepoint_folder_path?: string;
+        output_site_id?: string;
+        output_library_id?: string;
+        output_folder_path?: string;
+    }): Promise<Tender> => {
         const response = await api.post<ApiResponse<Tender>>('/tenders', data);
         if (!response.data.success || !response.data.data) {
             throw new Error(response.data.error || 'Failed to create tender');
@@ -56,10 +66,13 @@ export const filesApi = {
         return response.data.data || [];
     },
 
-    upload: async (tenderId: string, file: File, category: string = 'uncategorized'): Promise<TenderFile> => {
+    upload: async (tenderId: string, file: File, category: string = 'uncategorized', source?: 'local' | 'sharepoint'): Promise<TenderFile> => {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('category', category);
+        if (source) {
+            formData.append('source', source);
+        }
 
         const response = await api.post<ApiResponse<TenderFile>>(
             `/tenders/${tenderId}/files`,

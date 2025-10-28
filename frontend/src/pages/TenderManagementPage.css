@@ -39,6 +39,12 @@
     flex-direction: column;
 }
 
+.upload-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
 .file-workspace {
     display: grid;
     grid-template-columns: 280px 1fr;

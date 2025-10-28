@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { TenderFile, TitleBlockCoords } from '../types';
 import { uipathApi, filesApi } from '../services/api';
+import Dialog from './Dialog';
 import './CreateTenderModal.css';
 import './ExtractionModal.css';
 
@@ -26,6 +27,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
   const [showRegionSelector, setShowRegionSelector] = useState(false);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
+  const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
@@ -343,7 +345,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
       onSubmit();
     } catch (error) {
       console.error('Failed to queue extraction:', error);
-      alert('Failed to queue extraction. Please try again.');
+      setErrorDialog({ show: true, message: 'Failed to queue extraction. Please try again.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -449,6 +451,14 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
           </button>
         </div>
       </div>
+
+      <Dialog
+        isOpen={errorDialog.show}
+        title="Error"
+        message={errorDialog.message}
+        type="alert"
+        onConfirm={() => setErrorDialog({ show: false, message: '' })}
+      />
     </div>
   );
 };

@@ -1,10 +1,16 @@
 import { Configuration, PublicClientApplication } from '@azure/msal-browser';
 
-// MSAL configuration
+// Get build-time environment variables for SharePoint picker
+const entraClientId = import.meta.env.VITE_ENTRA_CLIENT_ID || '';
+const entraTenantId = import.meta.env.VITE_ENTRA_TENANT_ID || '';
+
+// MSAL configuration using build-time env vars (for SharePoint picker)
 export const msalConfig: Configuration = {
     auth: {
-        clientId: import.meta.env.VITE_ENTRA_CLIENT_ID || '',
-        authority: `https://login.microsoftonline.com/${import.meta.env.VITE_ENTRA_TENANT_ID || 'common'}`,
+        clientId: entraClientId,
+        authority: entraTenantId
+            ? `https://login.microsoftonline.com/${entraTenantId}`
+            : undefined,
         redirectUri: window.location.origin,
     },
     cache: {
@@ -21,8 +27,53 @@ export const tokenRequest = {
 // Create the MSAL instance
 export const msalInstance = new PublicClientApplication(msalConfig);
 
-// Initialize MSAL
+// Track if configuration has been loaded from backend (for Graph API)
+let backendConfigLoaded = false;
+let backendConfigPromise: Promise<void> | null = null;
+let graphApiClientId = '';
+let graphApiTenantId = '';
+
+// Load configuration from backend for Graph API token requests
+async function loadConfigFromBackend(): Promise<void> {
+    if (backendConfigLoaded) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/config');
+        const result = await response.json();
+
+        if (result.success && result.data) {
+            const { entraClientId, entraTenantId } = result.data;
+
+            if (entraClientId && entraTenantId) {
+                graphApiClientId = entraClientId;
+                graphApiTenantId = entraTenantId;
+
+                console.log('Backend configuration loaded for Graph API');
+                console.log('Graph API Client ID:', entraClientId);
+                console.log('Graph API Tenant ID:', entraTenantId);
+
+                backendConfigLoaded = true;
+            } else {
+                console.warn('Entra credentials not configured on backend');
+            }
+        } else {
+            console.error('Failed to load config from backend:', result.error);
+        }
+    } catch (error) {
+        console.error('Error loading config from backend:', error);
+    }
+}
+
+// Initialize MSAL with build-time configuration (for SharePoint picker)
 export const initializeMsal = async () => {
+    // Only initialize if we have a client ID
+    if (!msalConfig.auth.clientId) {
+        console.log('No Entra Client ID configured, skipping MSAL initialization');
+        return;
+    }
+
     await msalInstance.initialize();
 
     // Handle redirect promise
@@ -35,11 +86,19 @@ export const initializeMsal = async () => {
     }
 };
 
-// Get delegated token for SharePoint
+// Get delegated token for SharePoint (uses build-time config)
 export const getDelegatedToken = async (
     client: PublicClientApplication,
     resource: string
 ): Promise<string | undefined> => {
+    // Ensure MSAL is initialized
+    try {
+        await client.initialize();
+    } catch (error) {
+        // Already initialized, ignore error
+        console.log('MSAL already initialized or initialization error:', error);
+    }
+
     const newTokenRequest = {
         ...tokenRequest,
         scopes: [resource + '/.default'],
@@ -47,9 +106,41 @@ export const getDelegatedToken = async (
 
     console.log('Requesting delegated token with scopes:', newTokenRequest.scopes);
 
-    const activeAccount = client.getActiveAccount();
+    let activeAccount = client.getActiveAccount();
+
+    // If no active account, try to get one from all accounts
     if (!activeAccount) {
-        console.error('No active account found for delegated token request');
+        console.log('No active account found, checking all accounts...');
+        const accounts = client.getAllAccounts();
+        if (accounts.length > 0) {
+            activeAccount = accounts[0];
+            client.setActiveAccount(activeAccount);
+            console.log('Set active account from existing accounts:', activeAccount.username);
+        } else {
+            console.log('No accounts found, attempting interactive login...');
+            // No accounts at all, need to login
+            try {
+                const loginResponse = await client.loginPopup({
+                    ...newTokenRequest,
+                    prompt: 'select_account',
+                });
+                if (loginResponse.account) {
+                    client.setActiveAccount(loginResponse.account);
+                    activeAccount = loginResponse.account;
+                    console.log('Active account set after login popup:', activeAccount.username);
+                } else {
+                    console.error('No account returned from login popup');
+                    return undefined;
+                }
+            } catch (loginError) {
+                console.error('Login popup failed:', loginError);
+                return undefined;
+            }
+        }
+    }
+
+    if (!activeAccount) {
+        console.error('Still no active account after attempting to get one');
         return undefined;
     }
 
@@ -65,24 +156,116 @@ export const getDelegatedToken = async (
         .catch(async (error) => {
             console.log('Error acquiring token silently:', error);
             // If silent token acquisition fails, try to acquire token interactively
-            const resp = await client.loginPopup(newTokenRequest);
-            if (!resp.account) {
-                console.error('No account found after login popup');
+            try {
+                const resp = await client.acquireTokenPopup(newTokenRequest);
+                console.log('Token acquired via popup');
+                return resp.accessToken;
+            } catch (popupError) {
+                console.error('Token acquisition via popup failed:', popupError);
                 return undefined;
             }
-            client.setActiveAccount(resp.account);
-            console.log('Active account set after login popup:', resp.account.username);
-            // If the login was successful, try to acquire the token again
-
-            if (resp.idToken) {
-                console.log('ID token received after login popup:', resp.idToken);
-                const resp2 = await client.acquireTokenSilent(newTokenRequest);
-                return resp2.accessToken;
-            }
-            console.error('No ID token received after login popup');
-            return undefined;
         });
 };
 
-// Check if we're using MSAL (client ID is configured)
-export const useLogin = !!import.meta.env.VITE_ENTRA_CLIENT_ID;
+// Get delegated token for Graph API (uses runtime backend config)
+export const getGraphApiToken = async (
+    resource: string
+): Promise<string | undefined> => {
+    // Load backend config if not already loaded
+    if (!backendConfigPromise) {
+        backendConfigPromise = loadConfigFromBackend();
+    }
+    await backendConfigPromise;
+
+    // Check if we have backend config
+    if (!graphApiClientId || !graphApiTenantId) {
+        console.error('Backend configuration not loaded for Graph API');
+        return undefined;
+    }
+
+    // Create a separate MSAL instance for Graph API with backend config
+    const graphApiMsalConfig: Configuration = {
+        auth: {
+            clientId: graphApiClientId,
+            authority: `https://login.microsoftonline.com/${graphApiTenantId}`,
+            redirectUri: window.location.origin,
+        },
+        cache: {
+            cacheLocation: 'sessionStorage',
+            storeAuthStateInCookie: false,
+        },
+    };
+
+    const graphApiClient = new PublicClientApplication(graphApiMsalConfig);
+    await graphApiClient.initialize();
+
+    const newTokenRequest = {
+        ...tokenRequest,
+        scopes: [resource + '/.default'],
+    };
+
+    console.log('Requesting Graph API token with scopes:', newTokenRequest.scopes);
+
+    let activeAccount = graphApiClient.getActiveAccount();
+
+    // If no active account, try to get one from all accounts
+    if (!activeAccount) {
+        console.log('No active account found for Graph API, checking all accounts...');
+        const accounts = graphApiClient.getAllAccounts();
+        if (accounts.length > 0) {
+            activeAccount = accounts[0];
+            graphApiClient.setActiveAccount(activeAccount);
+            console.log('Set active account from existing accounts:', activeAccount.username);
+        } else {
+            console.log('No accounts found for Graph API, attempting interactive login...');
+            // No accounts at all, need to login
+            try {
+                const loginResponse = await graphApiClient.loginPopup({
+                    ...newTokenRequest,
+                    prompt: 'select_account',
+                });
+                if (loginResponse.account) {
+                    graphApiClient.setActiveAccount(loginResponse.account);
+                    activeAccount = loginResponse.account;
+                    console.log('Active account set after login popup:', activeAccount.username);
+                } else {
+                    console.error('No account returned from login popup');
+                    return undefined;
+                }
+            } catch (loginError) {
+                console.error('Login popup failed:', loginError);
+                return undefined;
+            }
+        }
+    }
+
+    if (!activeAccount) {
+        console.error('Still no active account after attempting to get one');
+        return undefined;
+    }
+
+    console.log('Active account for Graph API token request:', activeAccount.username);
+
+    return graphApiClient
+        .acquireTokenSilent({
+            ...newTokenRequest,
+            redirectUri: window.location.origin,
+            account: activeAccount,
+        })
+        .then((r) => r.accessToken)
+        .catch(async (error) => {
+            console.log('Error acquiring Graph API token silently:', error);
+            // If silent token acquisition fails, try to acquire token interactively
+            try {
+                const resp = await graphApiClient.acquireTokenPopup(newTokenRequest);
+                console.log('Graph API token acquired via popup');
+                return resp.accessToken;
+            } catch (popupError) {
+                console.error('Graph API token acquisition via popup failed:', popupError);
+                return undefined;
+            }
+        });
+};
+
+// Check if we're using MSAL (client ID is configured at build time)
+export const useLogin = !!entraClientId;

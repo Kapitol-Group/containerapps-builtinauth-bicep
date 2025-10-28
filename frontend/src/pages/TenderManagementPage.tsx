@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { tendersApi, filesApi } from '../services/api';
+import { tendersApi, filesApi, configApi } from '../services/api';
 import { Tender, TenderFile } from '../types';
 import FileUploadZone from '../components/FileUploadZone';
+import SharePointFileBrowser from '../components/SharePointFileBrowser';
 import FileBrowser from '../components/FileBrowser';
 import FilePreview from '../components/FilePreview';
 import ExtractionModal from '../components/ExtractionModal';
+import Dialog from '../components/Dialog';
 import './TenderManagementPage.css';
 
 const TenderManagementPage: React.FC = () => {
@@ -18,13 +20,29 @@ const TenderManagementPage: React.FC = () => {
   const [showExtractionModal, setShowExtractionModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<TenderFile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [config, setConfig] = useState<{ sharepointBaseUrl: string } | null>(null);
+  const [alertDialog, setAlertDialog] = useState<{ show: boolean; message: string; title: string }>({ 
+    show: false, 
+    message: '', 
+    title: '' 
+  });
 
   useEffect(() => {
+    loadConfig();
     if (tenderId) {
       loadTender();
       loadFiles();
     }
   }, [tenderId]);
+
+  const loadConfig = async () => {
+    try {
+      const data = await configApi.get();
+      setConfig({ sharepointBaseUrl: data.sharepointBaseUrl });
+    } catch (error) {
+      console.error('Failed to load config:', error);
+    }
+  };
 
   const loadTender = async () => {
     if (!tenderId) return;
@@ -71,7 +89,11 @@ const TenderManagementPage: React.FC = () => {
     if (selectedFiles.length > 0) {
       setShowExtractionModal(true);
     } else {
-      alert('Please select files for extraction');
+      setAlertDialog({ 
+        show: true, 
+        title: 'No Files Selected', 
+        message: 'Please select files for extraction' 
+      });
     }
   };
 
@@ -93,7 +115,11 @@ const TenderManagementPage: React.FC = () => {
       loadFiles();
     } catch (error) {
       console.error(`Failed to delete ${file.name}:`, error);
-      alert(`Failed to delete file: ${error}`);
+      setAlertDialog({ 
+        show: true, 
+        title: 'Delete Failed', 
+        message: `Failed to delete file: ${error}` 
+      });
     }
   };
 
@@ -116,7 +142,18 @@ const TenderManagementPage: React.FC = () => {
       </header>
 
       <div className="page-content">
-        <FileUploadZone onFilesDropped={handleFilesUploaded} />
+        <div className="upload-section">
+          <FileUploadZone onFilesDropped={handleFilesUploaded} />
+          
+          {config?.sharepointBaseUrl && (
+            <SharePointFileBrowser
+              tenderId={tenderId!}
+              defaultSharePointPath={tender?.sharepoint_folder_path}
+              sharepointBaseUrl={config.sharepointBaseUrl}
+              onFilesImported={loadFiles}              
+            />
+          )}
+        </div>
         
         <div className="file-workspace">
           <FileBrowser
@@ -140,10 +177,22 @@ const TenderManagementPage: React.FC = () => {
           onClose={() => setShowExtractionModal(false)}
           onSubmit={() => {
             setShowExtractionModal(false);
-            alert('Extraction job queued successfully!');
+            setAlertDialog({ 
+              show: true, 
+              title: 'Success', 
+              message: 'Extraction job queued successfully!' 
+            });
           }}
         />
       )}
+
+      <Dialog
+        isOpen={alertDialog.show}
+        title={alertDialog.title}
+        message={alertDialog.message}
+        type="alert"
+        onConfirm={() => setAlertDialog({ show: false, message: '', title: '' })}
+      />
     </div>
   );
 };

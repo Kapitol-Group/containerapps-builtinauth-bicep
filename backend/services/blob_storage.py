@@ -204,19 +204,19 @@ class BlobStorageService:
         directories = []
 
         for blob in blob_list:
-            # Skip directory markers (blobs ending with / or with size 0 and no content type)
-            # In hierarchical namespace, directories are virtual and will be removed automatically
-            if blob.name.endswith('/') or (blob.size == 0 and not blob.name.endswith('.tender_metadata')):
+            # Skip only directory markers (blobs ending with /)
+            # Keep .tender_metadata and actual files even if size is 0
+            if blob.name.endswith('/'):
                 directories.append(blob.name)
-                logger.debug(f"Skipping directory blob: {blob.name}")
+                logger.debug(f"Skipping directory marker: {blob.name}")
                 continue
 
             files_to_delete.append(blob.name)
 
         logger.info(
-            f"Found {len(files_to_delete)} files and {len(directories)} directories to delete for tender {tender_id}")
+            f"Found {len(files_to_delete)} files and {len(directories)} directory markers for tender {tender_id}")
 
-        # Delete all files (directories will be removed automatically)
+        # Delete all files (directories will be removed automatically in hierarchical namespace)
         for blob_name in files_to_delete:
             try:
                 blob_client = self.container_client.get_blob_client(blob_name)
@@ -228,7 +228,8 @@ class BlobStorageService:
                 logger.error(error_msg)
                 errors.append(error_msg)
 
-        logger.info(f"Deleted {deleted_count} files for tender {tender_id}")
+        logger.info(
+            f"Successfully deleted {deleted_count} files for tender {tender_id}")
 
         if errors:
             raise Exception(
@@ -273,13 +274,14 @@ class BlobStorageService:
                 'category': blob.metadata.get('category', 'uncategorized') if blob.metadata else 'uncategorized',
                 'uploaded_by': blob.metadata.get('uploaded_by') if blob.metadata else None,
                 'uploaded_at': blob.metadata.get('uploaded_at') if blob.metadata else None,
-                'last_modified': blob.last_modified.isoformat() if blob.last_modified else None
+                'last_modified': blob.last_modified.isoformat() if blob.last_modified else None,
+                'source': blob.metadata.get('source', 'local') if blob.metadata else 'local'
             })
 
         return files
 
     def upload_file(self, tender_id: str, file: FileStorage, category: str = 'uncategorized',
-                    uploaded_by: str = 'Unknown') -> Dict:
+                    uploaded_by: str = 'Unknown', source: str = 'local') -> Dict:
         """
         Upload a file to a tender
 
@@ -288,6 +290,7 @@ class BlobStorageService:
             file: File to upload
             category: File category
             uploaded_by: User who uploaded the file
+            source: Source of the file ('local' or 'sharepoint')
 
         Returns:
             File information dictionary
@@ -302,7 +305,8 @@ class BlobStorageService:
             'category': category,
             'uploaded_by': uploaded_by,
             'uploaded_at': datetime.utcnow().isoformat(),
-            'original_filename': file.filename
+            'original_filename': file.filename,
+            'source': source
         }
 
         blob_client = self.container_client.get_blob_client(blob_name)
@@ -317,6 +321,7 @@ class BlobStorageService:
             'name': file.filename,
             'path': blob_name,
             'category': category,
+            'source': source,
             **file_metadata
         }
 

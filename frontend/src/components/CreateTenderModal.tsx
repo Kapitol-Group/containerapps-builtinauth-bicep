@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { tendersApi, configApi } from '../services/api';
 import { Tender } from '../types';
 import { SharePointFilePicker } from './SharePointFilePicker';
+import { extractSharePointIdentifiersWithPath } from '../utils/sharepoint';
+import { getGraphApiToken } from '../authConfig';
 import './CreateTenderModal.css';
 
 interface CreateTenderModalProps {
@@ -12,7 +14,18 @@ interface CreateTenderModalProps {
 const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTenderCreated }) => {
   const [name, setName] = useState('');
   const [sharepointPath, setSharepointPath] = useState('');
+  
+  // SharePoint identifiers for the tender location
+  const [sharepointsiteid, setSharepointsiteid] = useState('');
+  const [sharepointlibraryid, setSharepointlibraryid] = useState('');
+  const [sharepointfolderpath, setSharepointfolderpath] = useState('');
+  
+  // Output location identifiers
   const [outputLocation, setOutputLocation] = useState('');
+  const [outputSiteId, setOutputSiteId] = useState('');
+  const [outputLibraryId, setOutputLibraryId] = useState('');
+  const [outputFolderPath, setOutputFolderPath] = useState('');
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [sharePointBaseUrl, setSharePointBaseUrl] = useState<string>('');
@@ -52,8 +65,14 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
       
       const tender = await tendersApi.create({
         name: name.trim(),
-        sharepoint_path: sharepointPath.trim() || undefined,
-        output_location: outputLocation.trim() || undefined,
+        // Send the three SharePoint identifiers
+        sharepoint_site_id: sharepointsiteid || undefined,
+        sharepoint_library_id: sharepointlibraryid || undefined,
+        sharepoint_folder_path: sharepointfolderpath || undefined,
+        // Output location identifiers
+        output_site_id: outputSiteId || undefined,
+        output_library_id: outputLibraryId || undefined,
+        output_folder_path: outputFolderPath || undefined,
       });
       
       onTenderCreated(tender);
@@ -64,59 +83,87 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
     }
   };
 
-  const handleSharePointPathPicked = (data: any) => {
-    console.log('SharePoint path picked:', data);
+  const handleSharePointPathPicked = async (data: any) => {
+    console.log('SharePoint path picked - FULL DATA:', JSON.stringify(data, null, 2));
     
-    // Extract the file/folder path from the picker result
-    if (data.items && data.items.length > 0) {
-      const item = data.items[0];
-      // Build SharePoint URL from the picked item
-      // Use webUrl if available, otherwise construct from endpoint and item details
-      let path = '';
-      
-      if (item.webUrl) {
-        path = item.webUrl;
-      } else if (item['@sharePoint.endpoint'] && item.id) {
-        // Construct path from endpoint and item ID
-        const endpoint = item['@sharePoint.endpoint'];
-        const baseUrl = endpoint.replace('/_api/v2.0', '');
-        
-        // If we have parentReference with driveId, we can construct a better path
-        if (item.parentReference?.driveId) {
-          path = `${baseUrl}/_layouts/15/DocLib.aspx?id=${item.id}`;
-        } else {
-          path = item['@sharePoint.embedUrl'] || `${baseUrl}/item/${item.id}`;
-        }
+    try {
+      // Get access token for Graph API using runtime backend config
+      let accessToken: string | undefined;
+      try {
+        accessToken = await getGraphApiToken('https://graph.microsoft.com');
+        console.log('Got Graph API token for path lookup');
+      } catch (tokenError) {
+        console.warn('Could not get Graph API token, will try without it:', tokenError);
       }
+
+      // Extract SharePoint identifiers from the picker result (with optional Graph API lookup)
+      const identifiers = await extractSharePointIdentifiersWithPath(data, accessToken);
       
-      console.log('Extracted SharePoint path:', path);
-      setSharepointPath(path);
+      if (identifiers) {
+        console.log('Extracted SharePoint identifiers:', identifiers);
+        console.log('Path source:', identifiers.pathSource);
+        
+        // Set the three identifiers
+        setSharepointsiteid(identifiers.sharepointsiteid);
+        setSharepointlibraryid(identifiers.sharepointlibraryid);
+        setSharepointfolderpath(identifiers.sharepointfolderpath);
+        
+        // Set a display-friendly path for the UI
+        if (identifiers.sharepointfolderpath) {
+          const sourceLabel = identifiers.pathSource === 'graphApi' ? ' (via Graph API)' : '';
+          setSharepointPath(identifiers.sharepointfolderpath + sourceLabel);
+        } else {
+          setSharepointPath('Selected (path unavailable - check console)');
+          console.warn('Folder path is unavailable despite Graph API attempt');
+        }
+      } else {
+        console.error('Failed to extract SharePoint identifiers');
+        setError('Failed to extract SharePoint information. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error in handleSharePointPathPicked:', err);
+      setError('An error occurred while processing the SharePoint selection.');
     }
   };
 
-  const handleOutputLocationPicked = (data: any) => {
+  const handleOutputLocationPicked = async (data: any) => {
     console.log('Output location picked:', data);
     
-    // Extract the folder path from the picker result
-    if (data.items && data.items.length > 0) {
-      const item = data.items[0];
-      let path = '';
-      
-      if (item.webUrl) {
-        path = item.webUrl;
-      } else if (item['@sharePoint.endpoint'] && item.id) {
-        const endpoint = item['@sharePoint.endpoint'];
-        const baseUrl = endpoint.replace('/_api/v2.0', '');
-        
-        if (item.parentReference?.driveId) {
-          path = `${baseUrl}/_layouts/15/DocLib.aspx?id=${item.id}`;
-        } else {
-          path = item['@sharePoint.embedUrl'] || `${baseUrl}/item/${item.id}`;
-        }
+    try {
+      // Get access token for Graph API using runtime backend config
+      let accessToken: string | undefined;
+      try {
+        accessToken = await getGraphApiToken('https://graph.microsoft.com');
+      } catch (tokenError) {
+        console.warn('Could not get Graph API token:', tokenError);
       }
+
+      // Extract SharePoint identifiers for output location
+      const identifiers = await extractSharePointIdentifiersWithPath(data, accessToken);
       
-      console.log('Extracted output location:', path);
-      setOutputLocation(path);
+      if (identifiers) {
+        console.log('Extracted output location identifiers:', identifiers);
+        console.log('Path source:', identifiers.pathSource);
+        
+        // Set the output location identifiers
+        setOutputSiteId(identifiers.sharepointsiteid);
+        setOutputLibraryId(identifiers.sharepointlibraryid);
+        setOutputFolderPath(identifiers.sharepointfolderpath);
+        
+        // Set a display-friendly path for the UI
+        if (identifiers.sharepointfolderpath) {
+          const sourceLabel = identifiers.pathSource === 'graphApi' ? ' (via Graph API)' : '';
+          setOutputLocation(identifiers.sharepointfolderpath + sourceLabel);
+        } else {
+          setOutputLocation('Selected (path unavailable)');
+        }
+      } else {
+        console.error('Failed to extract output location identifiers');
+        setError('Failed to extract output location information. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error in handleOutputLocationPicked:', err);
+      setError('An error occurred while processing the output location selection.');
     }
   };
 

@@ -43,6 +43,16 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
       setNumPages(0);
       setPageNum(1);
       setError(null);
+      setLoading(false);
+      
+      // Clear canvas
+      if (canvasRef.current) {
+        const context = canvasRef.current.getContext('2d');
+        if (context) {
+          canvasRef.current.width = 0;
+          canvasRef.current.height = 0;
+        }
+      }
     }
 
     return () => {
@@ -78,14 +88,31 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
     setError(null);
 
     try {
-      // Download the file as a blob
-      const blob = await filesApi.download(tenderId, file.path);
-      const arrayBuffer = await blob.arrayBuffer();
+      // Cancel any ongoing render task
+      if (renderTaskRef.current) {
+        renderTaskRef.current.cancel();
+        renderTaskRef.current = null;
+      }
 
       // Clean up previous PDF if exists
       if (pdfDocRef.current) {
         await pdfDocRef.current.destroy();
+        pdfDocRef.current = null;
       }
+
+      // Clear canvas before loading new PDF
+      if (canvasRef.current) {
+        const context = canvasRef.current.getContext('2d');
+        if (context) {
+          context.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+          canvasRef.current.width = 0;
+          canvasRef.current.height = 0;
+        }
+      }
+
+      // Download the file as a blob
+      const blob = await filesApi.download(tenderId, file.path);
+      const arrayBuffer = await blob.arrayBuffer();
 
       // Load the PDF
       const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
@@ -106,7 +133,10 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
   };
 
   const renderPage = async (num: number) => {
-    if (!pdfDocRef.current || !canvasRef.current) return;
+    if (!pdfDocRef.current || !canvasRef.current) {
+      console.log('Cannot render: missing PDF document or canvas ref');
+      return;
+    }
 
     // Cancel any ongoing render task
     if (renderTaskRef.current) {
@@ -119,11 +149,14 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
       const canvas = canvasRef.current;
       const context = canvas.getContext('2d');
       
-      if (!context) return;
+      if (!context) {
+        console.error('Failed to get canvas 2D context');
+        return;
+      }
 
       const viewport = page.getViewport({ scale });
       
-      // Set canvas dimensions
+      // Set canvas dimensions BEFORE clearing
       canvas.height = viewport.height;
       canvas.width = viewport.width;
 
@@ -141,6 +174,7 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
       
       await renderTask.promise;
       renderTaskRef.current = null;
+      console.log(`Successfully rendered page ${num} at ${Math.round(scale * 100)}% scale`);
     } catch (err: any) {
       // Ignore cancellation errors
       if (err?.name === 'RenderingCancelledException') {

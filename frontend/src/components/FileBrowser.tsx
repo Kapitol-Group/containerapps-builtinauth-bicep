@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { TenderFile } from '../types';
+import Dialog from './Dialog';
 
 interface FileBrowserProps {
   files: TenderFile[];
@@ -20,6 +21,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
   onFileDelete,
   loading 
 }) => {
+  const [confirmDelete, setConfirmDelete] = useState<{ show: boolean; file: TenderFile | null }>({ show: false, file: null });
   const handleFileClick = (file: TenderFile, event: React.MouseEvent) => {
     // Set as preview file
     onFileSelect(file);
@@ -72,9 +74,16 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
 
   const handleDeleteClick = (file: TenderFile, event: React.MouseEvent) => {
     event.stopPropagation();
-    if (onFileDelete && window.confirm(`Are you sure you want to delete "${file.name}"?`)) {
-      onFileDelete(file);
+    if (onFileDelete) {
+      setConfirmDelete({ show: true, file });
     }
+  };
+
+  const handleConfirmDelete = () => {
+    if (confirmDelete.file && onFileDelete) {
+      onFileDelete(confirmDelete.file);
+    }
+    setConfirmDelete({ show: false, file: null });
   };
 
   return (
@@ -124,6 +133,17 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
           ))}
         </div>
       )}
+
+      <Dialog
+        isOpen={confirmDelete.show}
+        title="Delete File"
+        message={`Are you sure you want to delete "${confirmDelete.file?.name}"?`}
+        type="confirm"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDelete({ show: false, file: null })}
+        confirmText="Delete"
+        cancelText="Cancel"
+      />
     </div>
   );
 };

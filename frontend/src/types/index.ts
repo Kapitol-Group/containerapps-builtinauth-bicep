@@ -6,8 +6,16 @@ export interface Tender {
     created_at: string;
     created_by: string;
     file_count: number;
-    sharepoint_path?: string;
-    output_location?: string;
+    sharepoint_path?: string; // Deprecated - kept for backward compatibility
+    output_location?: string; // Deprecated - kept for backward compatibility
+    // New SharePoint identifiers
+    sharepoint_site_id?: string;
+    sharepoint_library_id?: string;
+    sharepoint_folder_path?: string;
+    // Output location identifiers
+    output_site_id?: string;
+    output_library_id?: string;
+    output_folder_path?: string;
 }
 
 export interface TenderFile {
@@ -19,6 +27,7 @@ export interface TenderFile {
     uploaded_by: string | null;
     uploaded_at: string | null;
     last_modified: string | null;
+    source?: 'local' | 'sharepoint';
 }
 
 export interface TitleBlockCoords {

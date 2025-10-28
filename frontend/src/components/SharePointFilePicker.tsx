@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { PublicClientApplication } from '@azure/msal-browser';
 import { v4 as uuidv4 } from 'uuid';
 import { msalInstance, getDelegatedToken, useLogin } from '../authConfig';
+import Dialog from './Dialog';
 
 interface SharePointFilePickerProps {
   baseUrl: string;
@@ -17,11 +18,17 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
   baseUrl,
   tenderSitePath = '/sites/KapitolGroupNewBusinessTeam/Shared Documents',
   tenderFolder = '/01 TENDERS/Active/',
-  filters = ['.pdf', '.docx', '.xlsx', '.pptx', '.txt'],
+  filters = [],
   onFilePicked,
   buttonText = 'Browse SharePoint',
   className = '',
 }) => {
+  const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string; title: string }>({ 
+    show: false, 
+    message: '', 
+    title: 'Error' 
+  });
+  
   let win: Window | null = null;
   let port: MessagePort | null = null;
 
@@ -51,6 +58,9 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
                 oneDrive: {},
               },
         },
+        selection: {
+          mode: 'multiple', // Allow multiple file selection
+        },
         messaging: {
           origin: window.location.origin,
           channelId: channelId,
@@ -74,7 +84,11 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
       const token = useLogin ? await getDelegatedToken(msalInstance, baseUrl) : undefined;
       if (!token && useLogin) {
         console.error('Failed to get delegated token for SharePoint');
-        alert('Failed to authenticate with SharePoint. Please try again.');
+        setErrorDialog({ 
+          show: true, 
+          title: 'Authentication Failed', 
+          message: 'Failed to authenticate with SharePoint. Please try again.' 
+        });
         return;
       }
 
@@ -86,7 +100,11 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
       win = window.open('', 'Picker', 'width=1024,height=600');
       if (!win) {
         console.error('Failed to open picker window');
-        alert('Failed to open file picker. Please allow popups for this site.');
+        setErrorDialog({ 
+          show: true, 
+          title: 'Popup Blocked', 
+          message: 'Failed to open file picker. Please allow popups for this site.' 
+        });
         return;
       }
 
@@ -124,7 +142,11 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
       });
     } catch (error) {
       console.error('Error opening SharePoint picker:', error);
-      alert('An error occurred while opening the file picker.');
+      setErrorDialog({ 
+        show: true, 
+        title: 'Error', 
+        message: 'An error occurred while opening the file picker.' 
+      });
     }
   };
 
@@ -147,6 +169,7 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
 
         switch (command.command) {
           case 'authenticate':
+            console.log('Authenticate command received');
             const token = useLogin
               ? await getDelegatedToken(msalInstance, command.resource)
               : undefined;
@@ -210,8 +233,18 @@ export const SharePointFilePicker: React.FC<SharePointFilePickerProps> = ({
   };
 
   return (
-    <button type="button" className={`btn-secondary ${className}`} onClick={handleClick}>
-      📁 {buttonText}
-    </button>
+    <>
+      <button type="button" className={`btn-secondary ${className}`} onClick={handleClick}>
+        📁 {buttonText}
+      </button>
+
+      <Dialog
+        isOpen={errorDialog.show}
+        title={errorDialog.title}
+        message={errorDialog.message}
+        type="alert"
+        onConfirm={() => setErrorDialog({ show: false, message: '', title: 'Error' })}
+      />
+    </>
   );
 };

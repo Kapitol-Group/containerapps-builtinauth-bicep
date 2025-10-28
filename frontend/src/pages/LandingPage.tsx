@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { tendersApi } from '../services/api';
 import { Tender } from '../types';
 import CreateTenderModal from '../components/CreateTenderModal';
+import Dialog from '../components/Dialog';
 import './LandingPage.css';
 
 const LandingPage: React.FC = () => {
@@ -13,6 +14,8 @@ const LandingPage: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [deletingTenderId, setDeletingTenderId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ show: boolean; tenderId: string | null }>({ show: false, tenderId: null });
+  const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
 
   useEffect(() => {
     loadTenders();
@@ -55,9 +58,7 @@ const LandingPage: React.FC = () => {
 
   const handleDeleteClick = (e: React.MouseEvent, tenderId: string) => {
     e.stopPropagation(); // Prevent card click from triggering
-    if (window.confirm('Are you sure you want to delete this tender? This will permanently delete all associated files.')) {
-      deleteTender(tenderId);
-    }
+    setConfirmDelete({ show: true, tenderId });
   };
 
   const deleteTender = async (tenderId: string) => {
@@ -68,10 +69,17 @@ const LandingPage: React.FC = () => {
       setTenders(tenders.filter(t => t.id !== tenderId));
     } catch (error) {
       console.error('Failed to delete tender:', error);
-      alert('Failed to delete tender. Please try again.');
+      setErrorDialog({ show: true, message: 'Failed to delete tender. Please try again.' });
     } finally {
       setDeletingTenderId(null);
     }
+  };
+
+  const handleConfirmDelete = () => {
+    if (confirmDelete.tenderId) {
+      deleteTender(confirmDelete.tenderId);
+    }
+    setConfirmDelete({ show: false, tenderId: null });
   };
 
   return (
@@ -143,6 +151,25 @@ const LandingPage: React.FC = () => {
           onTenderCreated={handleTenderCreated}
         />
       )}
+
+      <Dialog
+        isOpen={confirmDelete.show}
+        title="Delete Tender"
+        message="Are you sure you want to delete this tender? This will permanently delete all associated files."
+        type="confirm"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDelete({ show: false, tenderId: null })}
+        confirmText="Delete"
+        cancelText="Cancel"
+      />
+
+      <Dialog
+        isOpen={errorDialog.show}
+        title="Error"
+        message={errorDialog.message}
+        type="alert"
+        onConfirm={() => setErrorDialog({ show: false, message: '' })}
+      />
     </div>
   );
 };

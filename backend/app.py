@@ -110,8 +110,20 @@ def create_tender():
     try:
         data = request.json
         tender_name = data.get('name')
+
+        # Legacy fields (kept for backward compatibility)
         sharepoint_path = data.get('sharepoint_path')
         output_location = data.get('output_location')
+
+        # New SharePoint identifier fields
+        sharepoint_site_id = data.get('sharepoint_site_id')
+        sharepoint_library_id = data.get('sharepoint_library_id')
+        sharepoint_folder_path = data.get('sharepoint_folder_path')
+
+        # Output location identifier fields
+        output_site_id = data.get('output_site_id')
+        output_library_id = data.get('output_library_id')
+        output_folder_path = data.get('output_folder_path')
 
         if not tender_name:
             return jsonify({
@@ -123,14 +135,37 @@ def create_tender():
         logger.info(
             f"Creating tender: {tender_name} by {user_info.get('name', 'Unknown')}")
 
+        # Build metadata with all SharePoint identifiers
+        metadata = {
+            'created_at': datetime.utcnow().isoformat()
+        }
+
+        # Add legacy fields if provided
+        if sharepoint_path:
+            metadata['sharepoint_path'] = sharepoint_path
+        if output_location:
+            metadata['output_location'] = output_location
+
+        # Add new SharePoint identifier fields if provided
+        if sharepoint_site_id:
+            metadata['sharepoint_site_id'] = sharepoint_site_id
+        if sharepoint_library_id:
+            metadata['sharepoint_library_id'] = sharepoint_library_id
+        if sharepoint_folder_path:
+            metadata['sharepoint_folder_path'] = sharepoint_folder_path
+
+        # Add output location identifier fields if provided
+        if output_site_id:
+            metadata['output_site_id'] = output_site_id
+        if output_library_id:
+            metadata['output_library_id'] = output_library_id
+        if output_folder_path:
+            metadata['output_folder_path'] = output_folder_path
+
         tender = blob_service.create_tender(
             tender_name=tender_name,
             created_by=user_info.get('name', 'Unknown'),
-            metadata={
-                'sharepoint_path': sharepoint_path,
-                'output_location': output_location,
-                'created_at': datetime.utcnow().isoformat()
-            }
+            metadata=metadata
         )
 
         logger.info(f"Successfully created tender: {tender['id']}")
@@ -218,6 +253,7 @@ def upload_file(tender_id: str):
 
         file = request.files['file']
         category = request.form.get('category', 'uncategorized')
+        source = request.form.get('source', 'local')  # 'local' or 'sharepoint'
 
         if file.filename == '':
             return jsonify({
@@ -227,13 +263,14 @@ def upload_file(tender_id: str):
 
         user_info = extract_user_info(request.headers)
         logger.info(
-            f"Uploading file {file.filename} to tender {tender_id}, category: {category}")
+            f"Uploading file {file.filename} to tender {tender_id}, category: {category}, source: {source}")
 
         file_info = blob_service.upload_file(
             tender_id=tender_id,
             file=file,
             category=category,
-            uploaded_by=user_info.get('name', 'Unknown')
+            uploaded_by=user_info.get('name', 'Unknown'),
+            source=source
         )
 
         logger.info(
