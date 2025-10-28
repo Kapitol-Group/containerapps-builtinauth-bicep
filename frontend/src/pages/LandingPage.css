@@ -1,10 +1,10 @@
 .landing-page {
     min-height: 100vh;
-    background-color: #f5f5f5;
+    background-color: var(--background-primary);
 }
 
 .header {
-    background: white;
+    background: var(--background-secondary);
     padding: 2rem;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     display: flex;
@@ -14,7 +14,7 @@
 
 .header h1 {
     margin: 0;
-    color: #333;
+    color: var(--primary-color);
     font-size: 1.8rem;
 }
 
@@ -37,7 +37,7 @@
     width: 100%;
     max-width: 400px;
     padding: 0.75rem 1rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     font-size: 1rem;
 }
@@ -45,7 +45,7 @@
 .loading {
     text-align: center;
     padding: 4rem;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .empty-state {
@@ -54,7 +54,7 @@
 }
 
 .empty-state p {
-    color: #666;
+    color: var(--text-secondary);
     margin-bottom: 1rem;
 }
 
@@ -65,22 +65,24 @@
 }
 
 .tender-card {
-    background: white;
+    background: var(--background-secondary);
     border-radius: 8px;
     padding: 1.5rem;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     cursor: pointer;
     transition: transform 0.2s, box-shadow 0.2s;
+    border: 1px solid transparent;
 }
 
 .tender-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-color: var(--secondary-color);
 }
 
 .tender-card h3 {
     margin: 0 0 1rem 0;
-    color: #333;
+    color: var(--primary-color);
 }
 
 .tender-meta {
@@ -88,21 +90,21 @@
     justify-content: space-between;
     margin-bottom: 1rem;
     font-size: 0.9rem;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .tender-footer {
     padding-top: 1rem;
-    border-top: 1px solid #eee;
+    border-top: 1px solid var(--border-color);
 }
 
 .created-by {
     font-size: 0.85rem;
-    color: #888;
+    color: var(--text-muted);
 }
 
 .btn-primary {
-    background-color: #007bff;
+    background-color: var(--primary-color);
     color: white;
     border: none;
     padding: 0.75rem 1.5rem;
@@ -113,11 +115,12 @@
 }
 
 .btn-primary:hover {
-    background-color: #0056b3;
+    background-color: var(--ocean-blue);
+    filter: brightness(0.85);
 }
 
 .btn-secondary {
-    background-color: #6c757d;
+    background-color: var(--accent-color);
     color: white;
     border: none;
     padding: 0.75rem 1.5rem;
@@ -128,5 +131,6 @@
 }
 
 .btn-secondary:hover {
-    background-color: #545b62;
+    background-color: var(--dusky-teal);
+    filter: brightness(0.85);
 }

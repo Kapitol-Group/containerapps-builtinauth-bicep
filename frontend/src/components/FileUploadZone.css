@@ -1,20 +1,20 @@
 .upload-zone {
-    border: 2px dashed #ddd;
+    border: 2px dashed var(--border-color);
     border-radius: 8px;
     padding: 1rem 1.5rem;
     text-align: center;
-    background-color: #fafafa;
+    background-color: var(--background-primary);
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .upload-zone.active {
-    border-color: #007bff;
-    background-color: #e7f3ff;
+    border-color: var(--secondary-color);
+    background-color: rgba(0, 212, 192, 0.1);
 }
 
 .upload-content p {
     margin: 0.5rem 0;
-    color: #666;
+    color: var(--text-secondary);
     font-size: 0.9rem;
 }

@@ -1,12 +1,12 @@
 .tender-management-page {
     min-height: 100vh;
-    background-color: #f5f5f5;
+    background-color: var(--background-primary);
     display: flex;
     flex-direction: column;
 }
 
 .page-header {
-    background: white;
+    background: var(--background-secondary);
     padding: 0.75rem 1.5rem;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     display: flex;
@@ -19,13 +19,14 @@
     border: none;
     font-size: 1rem;
     cursor: pointer;
-    color: #007bff;
+    color: var(--secondary-color);
 }
 
 .page-header h1 {
     flex: 1;
     margin: 0;
     font-size: 1.25rem;
+    color: var(--primary-color);
 }
 
 .page-content {
@@ -49,7 +50,7 @@
 
 .file-browser,
 .file-preview {
-    background: white;
+    background: var(--background-secondary);
     border-radius: 8px;
     padding: 1rem;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
@@ -62,6 +63,7 @@
 .file-preview h3 {
     margin: 0 0 0.75rem 0;
     font-size: 1rem;
+    color: var(--primary-color);
 }
 
 .file-browser-header {
@@ -78,19 +80,19 @@
 
 .select-all-btn {
     background: none;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-color);
     padding: 0.4rem 0.75rem;
     border-radius: 4px;
     font-size: 0.85rem;
     cursor: pointer;
-    color: #007bff;
+    color: var(--primary-color);
     white-space: nowrap;
     transition: all 0.2s ease;
 }
 
 .select-all-btn:hover {
-    background-color: #f0f8ff;
-    border-color: #007bff;
+    background-color: rgba(0, 212, 192, 0.1);
+    border-color: var(--secondary-color);
 }
 
 .file-list {
@@ -100,7 +102,7 @@
 
 .file-item {
     padding: 0.5rem;
-    border: 1px solid #eee;
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     margin-bottom: 0.4rem;
     cursor: pointer;
@@ -112,21 +114,22 @@
 }
 
 .file-item:hover {
-    background-color: #f5f5f5;
+    background-color: var(--background-primary);
 }
 
 .file-item.active {
-    background-color: #f0f8ff;
+    background-color: rgba(0, 212, 192, 0.1);
+    border-color: var(--secondary-color);
 }
 
 .file-item.selected {
-    background-color: #e7f3ff;
-    border-color: #007bff;
+    background-color: rgba(27, 77, 114, 0.1);
+    border-color: var(--primary-color);
 }
 
 .file-item.active.selected {
-    background-color: #d4ebff;
-    border-color: #0056b3;
+    background-color: rgba(0, 212, 192, 0.15);
+    border-color: var(--accent-color);
 }
 
 .file-item input[type="checkbox"] {
@@ -174,8 +177,8 @@
 
 .file-category {
     font-size: 0.75rem;
-    color: #666;
-    background: #f0f0f0;
+    color: var(--text-secondary);
+    background: var(--background-primary);
     padding: 0.15rem 0.4rem;
     border-radius: 3px;
 }
@@ -186,14 +189,14 @@
 
 .file-preview>p {
     margin: 0.5rem 0;
-    color: #666;
+    color: var(--text-secondary);
 }
 
 .file-preview .placeholder {
     padding: 2rem;
     text-align: center;
-    color: #999;
-    background: #fafafa;
+    color: var(--text-muted);
+    background: var(--background-primary);
     border-radius: 4px;
     margin-top: 1rem;
 }
