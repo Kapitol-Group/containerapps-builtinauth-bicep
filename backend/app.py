@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import os
 from datetime import datetime
 from typing import Optional
@@ -10,6 +11,13 @@ from flask_cors import CORS
 from services.blob_storage import BlobStorageService
 from services.uipath_client import UiPathClient
 from utils.auth import extract_user_info
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Create a flask app
 # Serve React build from frontend_build directory, fallback to templates/static for legacy routes
@@ -34,6 +42,16 @@ uipath_client = UiPathClient(
     base_url=os.getenv('UIPATH_API_URL'),
     api_key=os.getenv('UIPATH_API_KEY')
 )
+
+# Log startup info
+logger.info("=" * 60)
+logger.info("Construction Tender Automation Backend Starting")
+logger.info(
+    f"Storage Account: {os.getenv('AZURE_STORAGE_ACCOUNT_NAME', 'NOT SET')}")
+logger.info(
+    f"Container Name: {os.getenv('AZURE_STORAGE_CONTAINER_NAME', 'tender-documents')}")
+logger.info(f"UiPath Mock Mode: {os.getenv('UIPATH_MOCK_MODE', 'true')}")
+logger.info("=" * 60)
 
 # ========== Web Routes (existing functionality) ==========
 
@@ -71,12 +89,15 @@ def hello():
 def list_tenders():
     """List all tenders"""
     try:
+        logger.debug("Listing all tenders")
         tenders = blob_service.list_tenders()
+        logger.debug(f"Found {len(tenders)} tenders")
         return jsonify({
             'success': True,
             'data': tenders
         })
     except Exception as e:
+        logger.error(f"Failed to list tenders: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -99,6 +120,8 @@ def create_tender():
             }), 400
 
         user_info = extract_user_info(request.headers)
+        logger.info(
+            f"Creating tender: {tender_name} by {user_info.get('name', 'Unknown')}")
 
         tender = blob_service.create_tender(
             tender_name=tender_name,
@@ -110,11 +133,13 @@ def create_tender():
             }
         )
 
+        logger.info(f"Successfully created tender: {tender['id']}")
         return jsonify({
             'success': True,
             'data': tender
         }), 201
     except Exception as e:
+        logger.error(f"Failed to create tender: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -147,12 +172,16 @@ def get_tender(tender_id: str):
 def delete_tender(tender_id: str):
     """Delete a tender"""
     try:
+        logger.info(f"Attempting to delete tender: {tender_id}")
         blob_service.delete_tender(tender_id)
+        logger.info(f"Successfully deleted tender: {tender_id}")
         return jsonify({
             'success': True,
             'message': 'Tender deleted successfully'
         })
     except Exception as e:
+        logger.error(
+            f"Failed to delete tender {tender_id}: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -197,6 +226,8 @@ def upload_file(tender_id: str):
             }), 400
 
         user_info = extract_user_info(request.headers)
+        logger.info(
+            f"Uploading file {file.filename} to tender {tender_id}, category: {category}")
 
         file_info = blob_service.upload_file(
             tender_id=tender_id,
@@ -205,11 +236,15 @@ def upload_file(tender_id: str):
             uploaded_by=user_info.get('name', 'Unknown')
         )
 
+        logger.info(
+            f"Successfully uploaded file {file.filename} to tender {tender_id}")
         return jsonify({
             'success': True,
             'data': file_info
         }), 201
     except Exception as e:
+        logger.error(
+            f"Failed to upload file to tender {tender_id}: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -270,12 +305,17 @@ def update_file_category(tender_id: str, file_path: str):
 def delete_file(tender_id: str, file_path: str):
     """Delete a file from a tender"""
     try:
+        logger.info(f"Deleting file {file_path} from tender {tender_id}")
         blob_service.delete_file(tender_id, file_path)
+        logger.info(
+            f"Successfully deleted file {file_path} from tender {tender_id}")
         return jsonify({
             'success': True,
             'message': 'File deleted successfully'
         })
     except Exception as e:
+        logger.error(
+            f"Failed to delete file {file_path} from tender {tender_id}: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)

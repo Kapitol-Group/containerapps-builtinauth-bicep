@@ -1,6 +1,7 @@
 """
 Azure Blob Storage service for managing tender documents
 """
+import logging
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -9,6 +10,8 @@ from io import BytesIO
 from azure.storage.blob import BlobServiceClient, ContainerClient, ContentSettings
 from azure.identity import DefaultAzureCredential
 from werkzeug.datastructures import FileStorage
+
+logger = logging.getLogger(__name__)
 
 
 class BlobStorageService:
@@ -187,13 +190,49 @@ class BlobStorageService:
         if not self.container_client:
             raise Exception("Blob storage not configured")
 
+        logger.info(f"Deleting tender: {tender_id}")
+
         # Delete all blobs with the tender_id prefix
         blob_list = self.container_client.list_blobs(
             name_starts_with=f"{tender_id}/")
 
+        deleted_count = 0
+        errors = []
+
+        # Separate files and directories
+        files_to_delete = []
+        directories = []
+
         for blob in blob_list:
-            blob_client = self.container_client.get_blob_client(blob.name)
-            blob_client.delete_blob()
+            # Skip directory markers (blobs ending with / or with size 0 and no content type)
+            # In hierarchical namespace, directories are virtual and will be removed automatically
+            if blob.name.endswith('/') or (blob.size == 0 and not blob.name.endswith('.tender_metadata')):
+                directories.append(blob.name)
+                logger.debug(f"Skipping directory blob: {blob.name}")
+                continue
+
+            files_to_delete.append(blob.name)
+
+        logger.info(
+            f"Found {len(files_to_delete)} files and {len(directories)} directories to delete for tender {tender_id}")
+
+        # Delete all files (directories will be removed automatically)
+        for blob_name in files_to_delete:
+            try:
+                blob_client = self.container_client.get_blob_client(blob_name)
+                blob_client.delete_blob()
+                deleted_count += 1
+                logger.debug(f"Deleted blob: {blob_name}")
+            except Exception as e:
+                error_msg = f"Failed to delete blob {blob_name}: {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+
+        logger.info(f"Deleted {deleted_count} files for tender {tender_id}")
+
+        if errors:
+            raise Exception(
+                f"Failed to delete some files: {'; '.join(errors)}")
 
     def list_files(self, tender_id: str) -> List[Dict]:
         """

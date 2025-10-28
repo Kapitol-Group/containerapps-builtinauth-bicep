@@ -12,6 +12,7 @@ const LandingPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [deletingTenderId, setDeletingTenderId] = useState<string | null>(null);
 
   useEffect(() => {
     loadTenders();
@@ -50,6 +51,27 @@ const LandingPage: React.FC = () => {
     setTenders([tender, ...tenders]);
     setShowCreateModal(false);
     navigate(`/tender/${tender.id}`);
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent, tenderId: string) => {
+    e.stopPropagation(); // Prevent card click from triggering
+    if (window.confirm('Are you sure you want to delete this tender? This will permanently delete all associated files.')) {
+      deleteTender(tenderId);
+    }
+  };
+
+  const deleteTender = async (tenderId: string) => {
+    try {
+      setDeletingTenderId(tenderId);
+      await tendersApi.delete(tenderId);
+      // Remove tender from state
+      setTenders(tenders.filter(t => t.id !== tenderId));
+    } catch (error) {
+      console.error('Failed to delete tender:', error);
+      alert('Failed to delete tender. Please try again.');
+    } finally {
+      setDeletingTenderId(null);
+    }
   };
 
   return (
@@ -91,7 +113,17 @@ const LandingPage: React.FC = () => {
                 className="tender-card"
                 onClick={() => handleTenderClick(tender.id)}
               >
-                <h3>{tender.name}</h3>
+                <div className="tender-card-header">
+                  <h3>{tender.name}</h3>
+                  <button
+                    className="btn-delete"
+                    onClick={(e) => handleDeleteClick(e, tender.id)}
+                    disabled={deletingTenderId === tender.id}
+                    aria-label="Delete tender"
+                  >
+                    {deletingTenderId === tender.id ? '...' : '×'}
+                  </button>
+                </div>
                 <div className="tender-meta">
                   <span>Files: {tender.file_count}</span>
                   <span>Created: {tender.created_at ? new Date(tender.created_at).toLocaleDateString() : 'Unknown'}</span>
