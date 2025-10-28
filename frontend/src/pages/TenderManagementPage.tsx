@@ -75,6 +75,28 @@ const TenderManagementPage: React.FC = () => {
     }
   };
 
+  const handleFileDelete = async (file: TenderFile) => {
+    if (!tenderId) return;
+    
+    try {
+      await filesApi.delete(tenderId, file.path);
+      
+      // Remove from selected files if it was selected
+      setSelectedFiles(prev => prev.filter(f => f.path !== file.path));
+      
+      // Clear preview if this was the previewed file
+      if (selectedFile?.path === file.path) {
+        setSelectedFile(null);
+      }
+      
+      // Reload files list
+      loadFiles();
+    } catch (error) {
+      console.error(`Failed to delete ${file.name}:`, error);
+      alert(`Failed to delete file: ${error}`);
+    }
+  };
+
   return (
     <div className="tender-management-page">
       <header className="page-header">
@@ -103,10 +125,11 @@ const TenderManagementPage: React.FC = () => {
             selectedFiles={selectedFiles}
             onFileSelect={handleFileSelect}
             onSelectionChange={setSelectedFiles}
+            onFileDelete={handleFileDelete}
             loading={loading}
           />
           
-          <FilePreview file={selectedFile} />
+          <FilePreview file={selectedFile} tenderId={tenderId} />
         </div>
       </div>
 

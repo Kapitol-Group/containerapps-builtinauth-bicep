@@ -10,6 +10,17 @@ const api = axios.create({
     },
 });
 
+// Config API
+export const configApi = {
+    get: async (): Promise<{ entraClientId: string; entraTenantId: string; sharepointBaseUrl: string }> => {
+        const response = await api.get<ApiResponse<{ entraClientId: string; entraTenantId: string; sharepointBaseUrl: string }>>('/config');
+        if (!response.data.success || !response.data.data) {
+            throw new Error('Failed to fetch configuration');
+        }
+        return response.data.data;
+    },
+};
+
 // Tenders API
 export const tendersApi = {
     list: async (): Promise<Tender[]> => {

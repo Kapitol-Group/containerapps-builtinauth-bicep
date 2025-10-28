@@ -16,6 +16,11 @@ param uipathTenantName string = ''
 param uipathFolderId string = ''
 param uipathMockMode string = 'true'
 
+// Frontend configuration parameters
+param entraClientId string = ''
+param entraTenantId string = ''
+param sharePointBaseUrl string = ''
+
 resource acaIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
   location: location
@@ -50,6 +55,18 @@ var baseEnvVars = [
   {
     name: 'UIPATH_MOCK_MODE'
     value: uipathMockMode
+  }
+  {
+    name: 'ENTRA_CLIENT_ID'
+    value: entraClientId
+  }
+  {
+    name: 'ENTRA_TENANT_ID'
+    value: entraTenantId
+  }
+  {
+    name: 'SHAREPOINT_BASE_URL'
+    value: sharePointBaseUrl
   }
 ]
 

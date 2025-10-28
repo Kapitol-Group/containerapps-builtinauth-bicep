@@ -1,3 +1,28 @@
+:root {
+    /* Brand Colors from Guidelines */
+    --kapitol-teal: #00D4C0;
+    --dusky-teal: #5B9B9F;
+    --ocean-blue: #1B4D72;
+    --obsidian-black: #0A0A0A;
+    --hi-vis-yellow: #F0F60A;
+    --cloudy-white: #F5F5F5;
+    --charcoal-grey: #424748;
+    --slate-grey: #8B9499;
+    --concrete-grey: #C0C5C7;
+
+    /* Semantic Color Variables */
+    --primary-color: var(--ocean-blue);
+    --secondary-color: var(--kapitol-teal);
+    --accent-color: var(--dusky-teal);
+    --warning-color: var(--hi-vis-yellow);
+    --background-primary: var(--cloudy-white);
+    --background-secondary: #ffffff;
+    --text-primary: var(--obsidian-black);
+    --text-secondary: var(--charcoal-grey);
+    --text-muted: var(--slate-grey);
+    --border-color: var(--concrete-grey);
+}
+
 body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',

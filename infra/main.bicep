@@ -20,6 +20,9 @@ param tokenStorageContainerName string = 'tokens'
 @description('Service Management Reference for the app registration')
 param serviceManagementReference string = ''
 
+@description('SharePoint base URL for the frontend')
+param sharePointBaseUrl string = ''
+
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
 
@@ -80,6 +83,10 @@ module aca 'aca.bicep' = {
     exists: acaExists
     storageAccountName: storage.outputs.name
     uipathMockMode: 'true'
+    // Frontend configuration - passed after app registration is created
+    entraClientId: '' // Will be updated via appupdate
+    entraTenantId: tenant().tenantId
+    sharePointBaseUrl: sharePointBaseUrl
   }
 }
 
@@ -137,3 +144,10 @@ output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
 
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_STORAGE_ACCOUNT_ID string = storage.outputs.id
+
+// Outputs for SharePoint FilePicker configuration
+output ENTRA_CLIENT_ID string = registration.outputs.clientAppId
+output ENTRA_TENANT_ID string = tenant().tenantId
+
+// Command to update container app with Client ID (run after deployment)
+output UPDATE_ENTRA_CLIENT_ID_COMMAND string = 'az containerapp update --name ${aca.outputs.name} --resource-group ${resourceGroup.name} --set-env-vars "ENTRA_CLIENT_ID=${registration.outputs.clientAppId}"'

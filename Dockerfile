@@ -3,6 +3,18 @@ FROM node:20-alpine AS frontend-build
 
 WORKDIR /frontend
 
+# Accept build arguments for Vite environment variables
+ARG VITE_ENTRA_CLIENT_ID
+ARG VITE_ENTRA_TENANT_ID
+ARG VITE_SHAREPOINT_BASE_URL
+ARG VITE_BACKEND_API_URL=/api
+
+# Set them as environment variables for the build process
+ENV VITE_ENTRA_CLIENT_ID=$VITE_ENTRA_CLIENT_ID
+ENV VITE_ENTRA_TENANT_ID=$VITE_ENTRA_TENANT_ID
+ENV VITE_SHAREPOINT_BASE_URL=$VITE_SHAREPOINT_BASE_URL
+ENV VITE_BACKEND_API_URL=$VITE_BACKEND_API_URL
+
 # Copy frontend package files
 COPY frontend/package*.json ./
 RUN npm ci

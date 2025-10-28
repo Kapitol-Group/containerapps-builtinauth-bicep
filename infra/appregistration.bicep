@@ -33,7 +33,14 @@ param clientAppName string
 param clientAppDisplayName string
 
 @description('Specifies the scopes that the client application requires.')
-param clientAppScopes array = ['User.Read', 'offline_access', 'openid', 'profile']
+param clientAppScopes array = [
+  'User.Read'
+  'offline_access'
+  'openid'
+  'profile'
+  'Files.Read.All'
+  'Sites.Read.All'
+]
 
 param serviceManagementReference string = ''
 
@@ -77,7 +84,7 @@ resource clientApp 'Microsoft.Graph/applications@v1.0' = {
     name: '${clientApp.uniqueName}/miAsFic'
     audiences: [
       audiences[cloudEnvironment].uri
-   ]
+    ]
     issuer: issuer
     subject: webAppIdentityId
   }

@@ -372,6 +372,19 @@ def health_check():
     })
 
 
+@app.get('/api/config')
+def get_config():
+    """Get frontend configuration from environment variables"""
+    return jsonify({
+        'success': True,
+        'data': {
+            'entraClientId': os.getenv('ENTRA_CLIENT_ID', ''),
+            'entraTenantId': os.getenv('ENTRA_TENANT_ID', ''),
+            'sharepointBaseUrl': os.getenv('SHAREPOINT_BASE_URL', '')
+        }
+    })
+
+
 @app.errorhandler(404)
 def handle_404(e):
     if request.path.startswith('/api/'):

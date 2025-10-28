@@ -13,4 +13,8 @@ services:
     docker:
       remoteBuild: true
       path: ./Dockerfile
+      buildArgs:
+        - VITE_ENTRA_CLIENT_ID=${VITE_ENTRA_CLIENT_ID}
+        - VITE_ENTRA_TENANT_ID=${VITE_ENTRA_TENANT_ID}
+        - VITE_SHAREPOINT_BASE_URL=${VITE_SHAREPOINT_BASE_URL}
 

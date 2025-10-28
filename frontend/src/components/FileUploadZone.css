@@ -1,12 +1,11 @@
 .upload-zone {
     border: 2px dashed #ddd;
     border-radius: 8px;
-    padding: 2rem;
+    padding: 1rem 1.5rem;
     text-align: center;
     background-color: #fafafa;
     cursor: pointer;
     transition: all 0.2s;
-    margin-bottom: 1.5rem;
 }
 
 .upload-zone.active {
@@ -15,6 +14,7 @@
 }
 
 .upload-content p {
-    margin: 0 0 1rem 0;
+    margin: 0.5rem 0;
     color: #666;
+    font-size: 0.9rem;
 }

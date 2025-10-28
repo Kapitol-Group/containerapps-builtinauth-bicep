@@ -70,16 +70,41 @@ class BlobStorageService:
 
             tender_id = parts[0]
 
+            # Check if this is the metadata file for the tender
+            if blob.name.endswith('.tender_metadata'):
+                if tender_id not in tenders:
+                    tenders[tender_id] = {
+                        'id': tender_id,
+                        'name': blob.metadata.get('tender_name', tender_id) if blob.metadata else tender_id,
+                        'created_at': blob.metadata.get('created_at') if blob.metadata else None,
+                        'created_by': blob.metadata.get('created_by') if blob.metadata else None,
+                        'file_count': 0
+                    }
+                else:
+                    # Update tender metadata from the metadata file
+                    tenders[tender_id]['name'] = blob.metadata.get(
+                        'tender_name', tender_id) if blob.metadata else tender_id
+                    tenders[tender_id]['created_at'] = blob.metadata.get(
+                        'created_at') if blob.metadata else None
+                    tenders[tender_id]['created_by'] = blob.metadata.get(
+                        'created_by') if blob.metadata else None
+                continue
+
+            # Initialize tender if not exists (in case metadata file hasn't been seen yet)
             if tender_id not in tenders:
                 tenders[tender_id] = {
                     'id': tender_id,
-                    'name': blob.metadata.get('tender_name', tender_id) if blob.metadata else tender_id,
-                    'created_at': blob.metadata.get('created_at') if blob.metadata else None,
-                    'created_by': blob.metadata.get('created_by') if blob.metadata else None,
+                    'name': tender_id,
+                    'created_at': None,
+                    'created_by': None,
                     'file_count': 0
                 }
 
-            tenders[tender_id]['file_count'] += 1
+            # Only count actual files (not directories or empty blobs)
+            if blob.size > 0 and not blob.name.endswith('/'):
+                filename = blob.name.split('/')[-1]
+                if filename:  # Ensure there's a filename
+                    tenders[tender_id]['file_count'] += 1
 
         return list(tenders.values())
 
@@ -192,8 +217,17 @@ class BlobStorageService:
             if blob.name.endswith('.tender_metadata'):
                 continue
 
+            # Skip empty/virtual directory blobs (blobs with no size or ending with /)
+            if blob.size == 0 or blob.name.endswith('/'):
+                continue
+
+            # Skip blobs without a filename (e.g., just directories)
+            filename = blob.name.split('/')[-1]
+            if not filename:
+                continue
+
             files.append({
-                'name': blob.name.split('/')[-1],
+                'name': filename,
                 'path': blob.name,
                 'size': blob.size,
                 'content_type': blob.content_settings.content_type if blob.content_settings else None,
