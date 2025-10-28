@@ -94,10 +94,10 @@ const LandingPage: React.FC = () => {
                 <h3>{tender.name}</h3>
                 <div className="tender-meta">
                   <span>Files: {tender.file_count}</span>
-                  <span>Created: {new Date(tender.created_at).toLocaleDateString()}</span>
+                  <span>Created: {tender.created_at ? new Date(tender.created_at).toLocaleDateString() : 'Unknown'}</span>
                 </div>
                 <div className="tender-footer">
-                  <span className="created-by">By {tender.created_by}</span>
+                  <span className="created-by">By {tender.created_by || 'Unknown'}</span>
                 </div>
               </div>
             ))}

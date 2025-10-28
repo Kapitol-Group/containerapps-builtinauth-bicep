@@ -60,7 +60,7 @@ class BlobStorageService:
             return []
 
         tenders = {}
-        blob_list = self.container_client.list_blobs()
+        blob_list = self.container_client.list_blobs(include=['metadata'])
 
         for blob in blob_list:
             # Extract tender_id from blob path (format: tender_id/...)
