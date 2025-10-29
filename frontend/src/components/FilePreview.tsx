@@ -1,13 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
-import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist';
+import React, { useState, useEffect } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
 import { TenderFile } from '../types';
 import { filesApi } from '../services/api';
 import './FilePreview.css';
 
-// Configure PDF.js worker - use the bundled worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
+// Configure PDF.js worker - must be in same file as react-pdf components
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url
 ).toString();
 
@@ -17,64 +18,26 @@ interface FilePreviewProps {
 }
 
 const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const [pageNum, setPageNum] = useState(1);
   const [numPages, setNumPages] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scale, setScale] = useState(1.0);
-  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
-  const renderTaskRef = useRef<any>(null);
+  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
 
+  // Load PDF file when file or tenderId changes
   useEffect(() => {
     if (file && tenderId && isPdfFile(file)) {
       loadPdf();
     } else {
       // Clean up when no file is selected or file is not a PDF
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-      if (pdfDocRef.current) {
-        pdfDocRef.current.destroy();
-        pdfDocRef.current = null;
-      }
+      setPdfBlob(null);
       setNumPages(0);
       setPageNum(1);
       setError(null);
       setLoading(false);
-      
-      // Clear canvas
-      if (canvasRef.current) {
-        const context = canvasRef.current.getContext('2d');
-        if (context) {
-          canvasRef.current.width = 0;
-          canvasRef.current.height = 0;
-        }
-      }
     }
-
-    return () => {
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-      if (pdfDocRef.current) {
-        pdfDocRef.current.destroy();
-        pdfDocRef.current = null;
-      }
-    };
   }, [file, tenderId]);
-
-  useEffect(() => {
-    if (pdfDocRef.current && numPages > 0 && canvasRef.current) {
-      // Use setTimeout to ensure render happens after any state updates
-      setTimeout(() => {
-        renderPage(pageNum);
-      }, 0);
-    }
-  }, [pageNum, scale, numPages]);
 
   const isPdfFile = (file: TenderFile): boolean => {
     return file.content_type?.toLowerCase().includes('pdf') || 
@@ -88,102 +51,26 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
     setError(null);
 
     try {
-      // Cancel any ongoing render task
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-
-      // Clean up previous PDF if exists
-      if (pdfDocRef.current) {
-        await pdfDocRef.current.destroy();
-        pdfDocRef.current = null;
-      }
-
-      // Clear canvas before loading new PDF
-      if (canvasRef.current) {
-        const context = canvasRef.current.getContext('2d');
-        if (context) {
-          context.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-          canvasRef.current.width = 0;
-          canvasRef.current.height = 0;
-        }
-      }
-
       // Download the file as a blob
       const blob = await filesApi.download(tenderId, file.path);
-      const arrayBuffer = await blob.arrayBuffer();
-
-      // Load the PDF
-      const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-      const pdf = await loadingTask.promise;
-      
-      pdfDocRef.current = pdf;
-      setNumPages(pdf.numPages);
-      setPageNum(1);
+      setPdfBlob(blob);
       setLoading(false);
-      
-      // The useEffect will handle rendering when numPages/pageNum updates
-      // No need to manually call renderPage here
     } catch (err) {
       console.error('Error loading PDF:', err);
       setError('Failed to load PDF file');
       setLoading(false);
+      setPdfBlob(null);
     }
   };
 
-  const renderPage = async (num: number) => {
-    if (!pdfDocRef.current || !canvasRef.current) {
-      console.log('Cannot render: missing PDF document or canvas ref');
-      return;
-    }
+  const onDocumentLoadSuccess = ({ numPages: nextNumPages }: { numPages: number }) => {
+    setNumPages(nextNumPages);
+    setPageNum(1);
+  };
 
-    // Cancel any ongoing render task
-    if (renderTaskRef.current) {
-      renderTaskRef.current.cancel();
-      renderTaskRef.current = null;
-    }
-
-    try {
-      const page = await pdfDocRef.current.getPage(num);
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      
-      if (!context) {
-        console.error('Failed to get canvas 2D context');
-        return;
-      }
-
-      const viewport = page.getViewport({ scale });
-      
-      // Set canvas dimensions BEFORE clearing
-      canvas.height = viewport.height;
-      canvas.width = viewport.width;
-
-      // Clear the canvas before rendering
-      context.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Render the page
-      const renderContext = {
-        canvasContext: context,
-        viewport: viewport,
-      };
-
-      const renderTask = page.render(renderContext as any);
-      renderTaskRef.current = renderTask;
-      
-      await renderTask.promise;
-      renderTaskRef.current = null;
-      console.log(`Successfully rendered page ${num} at ${Math.round(scale * 100)}% scale`);
-    } catch (err: any) {
-      // Ignore cancellation errors
-      if (err?.name === 'RenderingCancelledException') {
-        console.log('Render cancelled');
-        return;
-      }
-      console.error('Error rendering page:', err);
-      setError('Failed to render PDF page');
-    }
+  const onDocumentLoadError = (error: Error) => {
+    console.error('Error loading PDF document:', error);
+    setError('Failed to load PDF document');
   };
 
   const nextPage = () => {
@@ -238,7 +125,7 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
   }
 
   return (
-    <div className="file-preview" ref={containerRef}>
+    <div className="file-preview">
       <div className="preview-header">
         <h3>{file.name}</h3>
         {numPages > 0 && (
@@ -272,9 +159,22 @@ const FilePreview: React.FC<FilePreviewProps> = ({ file, tenderId }) => {
       <div className="preview-content">
         {loading && <div className="loading">Loading PDF...</div>}
         {error && <div className="error">{error}</div>}
-        {!loading && !error && (
-          <div className="canvas-container">
-            <canvas ref={canvasRef} />
+        {!loading && !error && pdfBlob && (
+          <div className="pdf-document">
+            <Document
+              file={pdfBlob}
+              onLoadSuccess={onDocumentLoadSuccess}
+              onLoadError={onDocumentLoadError}
+              loading={<div className="loading">Loading document...</div>}
+            >
+              <Page
+                pageNumber={pageNum}
+                scale={scale}
+                loading={<div className="loading">Loading page...</div>}
+                renderAnnotationLayer={true}
+                renderTextLayer={true}
+              />
+            </Document>
           </div>
         )}
       </div>

@@ -89,19 +89,29 @@
     background: #e0e0e0;
 }
 
-.canvas-container {
+.pdf-document {
     background: var(--background-secondary);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
     margin: 0 auto;
-    min-width: 100px;
-    min-height: 100px;
 }
 
-.canvas-container canvas {
-    display: block;
+/* react-pdf default classes */
+.react-pdf__Document {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.react-pdf__Page {
     max-width: 100%;
-    height: auto;
-    width: 100%;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+    margin: 0;
+}
+
+.react-pdf__Page canvas {
+    max-width: 100%;
+    height: auto !important;
+    display: block;
 }
 
 .loading,
