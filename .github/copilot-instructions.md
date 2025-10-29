@@ -55,12 +55,13 @@ cd backend
 python3 -m pip install -r requirements.txt
 python3 -m flask run --port 50505 --debug
 
-# Frontend development server (proxies /api to backend)
+# Frontend development server (proxies /api to backend via vite.config.ts)
 cd frontend
 npm install
-npm run dev  # Runs on port 3000
+npm run dev  # Runs on port 3000, proxies /api/* to localhost:50505
 ```
 **Note**: MSAL/SharePoint features won't work locally without configuring `VITE_ENTRA_CLIENT_ID`.
+**Proxy Config**: `vite.config.ts` proxies `/api` to backend automatically - no CORS needed in development.
 
 ### Deployment with SharePoint Support
 ```bash
@@ -114,6 +115,13 @@ Tender ID: Lowercase, spaces → hyphens (e.g., "Project Alpha" → "project-alp
 - Extracts path from `items[0].sharePoint.path` in pick command
 - Requires delegated permissions: `Files.Read.All`, `Sites.Read.All`
 
+### Dual MSAL Instance Pattern
+**Critical**: Two separate MSAL instances for different auth scenarios:
+1. **SharePoint Picker** (`msalInstance`): Uses build-time `VITE_ENTRA_CLIENT_ID` from `authConfig.ts` - for delegated SharePoint access
+2. **Graph API** (`getGraphApiToken()`): Dynamically creates instance from backend `/api/config` endpoint - for Graph API calls
+
+**Why**: Build-time vars embedded in frontend bundle; runtime backend config allows flexibility without rebuild.
+
 ### Managed Identity Authentication
 Backend uses `DefaultAzureCredential()` - automatically works in Container Apps with managed identity. No connection strings or keys needed for Blob Storage access. Role assignment in `infra/core/storage/storage-role-assignment.bicep`.
 
@@ -150,6 +158,7 @@ Backend uses `DefaultAzureCredential()` - automatically works in Container Apps 
 2. Verify port 50505 exposed and bound in all locations
 3. Check Docker build args passed correctly in `azure.yaml`
 4. Inspect `gunicorn.conf.py` worker/thread settings (defaults: 4 workers, 8 threads)
+5. Gunicorn auto-scales: `(CPU_count * 2) + 1` workers, uses `max_requests=1000` for graceful restarts
 
 ### Frontend Shows Old Configuration
 **Symptom**: Environment variables not updating after `azd env set`
