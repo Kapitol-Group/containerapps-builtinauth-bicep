@@ -229,7 +229,12 @@ def delete_tender(tender_id: str):
 def list_files(tender_id: str):
     """List files in a tender"""
     try:
-        files = blob_service.list_files(tender_id)
+        # Get exclude_batched query parameter (default: False)
+        exclude_batched = request.args.get(
+            'exclude_batched', 'false').lower() == 'true'
+
+        files = blob_service.list_files(
+            tender_id, exclude_batched=exclude_batched)
         return jsonify({
             'success': True,
             'data': files
@@ -358,12 +363,191 @@ def delete_file(tender_id: str, file_path: str):
             'error': str(e)
         }), 500
 
+# Batches API
+
+
+@app.post('/api/tenders/<tender_id>/batches')
+def create_batch(tender_id: str):
+    """Create a new extraction batch"""
+    try:
+        data = request.json
+        batch_name = data.get('batch_name')
+        discipline = data.get('discipline')
+        file_paths = data.get('file_paths', [])
+        title_block_coords = data.get('title_block_coords')
+
+        if not all([batch_name, discipline, file_paths, title_block_coords]):
+            return jsonify({
+                'success': False,
+                'error': 'Missing required fields: batch_name, discipline, file_paths, title_block_coords'
+            }), 400
+
+        # Validate files exist
+        all_files = blob_service.list_files(tender_id)
+        existing_paths = {f['path'] for f in all_files}
+        for file_path in file_paths:
+            if file_path not in existing_paths:
+                return jsonify({
+                    'success': False,
+                    'error': f'File not found: {file_path}'
+                }), 400
+
+        user_info = extract_user_info(request.headers)
+        logger.info(
+            f"Creating batch '{batch_name}' for tender {tender_id} with {len(file_paths)} files")
+
+        # Create batch
+        batch = blob_service.create_batch(
+            tender_id=tender_id,
+            batch_name=batch_name,
+            discipline=discipline,
+            file_paths=file_paths,
+            title_block_coords=title_block_coords,
+            submitted_by=user_info.get('name', 'Unknown'),
+            job_id=None  # Will be set when UiPath job is submitted
+        )
+
+        # Update file categories and batch references
+        updated_count = blob_service.update_files_category(
+            tender_id=tender_id,
+            file_paths=file_paths,
+            category=discipline,
+            batch_id=batch['batch_id']
+        )
+
+        logger.info(
+            f"Created batch {batch['batch_id']}, updated {updated_count} files")
+
+        return jsonify({
+            'success': True,
+            'data': batch
+        }), 201
+    except Exception as e:
+        logger.error(
+            f"Failed to create batch for tender {tender_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.get('/api/tenders/<tender_id>/batches')
+def list_batches(tender_id: str):
+    """List all batches for a tender"""
+    try:
+        batches = blob_service.list_batches(tender_id)
+        return jsonify({
+            'success': True,
+            'data': batches
+        })
+    except Exception as e:
+        logger.error(
+            f"Failed to list batches for tender {tender_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.get('/api/tenders/<tender_id>/batches/<batch_id>')
+def get_batch(tender_id: str, batch_id: str):
+    """Get batch details and files"""
+    try:
+        batch = blob_service.get_batch(tender_id, batch_id)
+        if not batch:
+            return jsonify({
+                'success': False,
+                'error': 'Batch not found'
+            }), 404
+
+        # Get files in batch
+        files = blob_service.get_batch_files(tender_id, batch_id)
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'batch': batch,
+                'files': files
+            }
+        })
+    except Exception as e:
+        logger.error(
+            f"Failed to get batch {batch_id} for tender {tender_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.patch('/api/tenders/<tender_id>/batches/<batch_id>')
+def update_batch_status(tender_id: str, batch_id: str):
+    """Update batch status"""
+    try:
+        data = request.json
+        status = data.get('status')
+
+        if not status:
+            return jsonify({
+                'success': False,
+                'error': 'Status is required'
+            }), 400
+
+        batch = blob_service.update_batch_status(tender_id, batch_id, status)
+
+        if not batch:
+            return jsonify({
+                'success': False,
+                'error': 'Batch not found'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'data': batch
+        })
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except Exception as e:
+        logger.error(
+            f"Failed to update batch {batch_id} status: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.delete('/api/tenders/<tender_id>/batches/<batch_id>')
+def delete_batch(tender_id: str, batch_id: str):
+    """Delete a batch (admin only - files remain categorized)"""
+    try:
+        success = blob_service.delete_batch(tender_id, batch_id)
+
+        if not success:
+            return jsonify({
+                'success': False,
+                'error': 'Batch not found or could not be deleted'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'message': 'Batch deleted successfully. Files remain categorized.'
+        })
+    except Exception as e:
+        logger.error(
+            f"Failed to delete batch {batch_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 # UiPath API
 
 
 @app.post('/api/uipath/extract')
 def queue_extraction():
-    """Queue drawing metadata extraction via UiPath"""
+    """Queue drawing metadata extraction via UiPath - creates batch and submits job"""
     try:
         data = request.json
         tender_id = data.get('tender_id')
@@ -371,29 +555,78 @@ def queue_extraction():
         discipline = data.get('discipline')
         # {x, y, width, height} in pixels
         title_block_coords = data.get('title_block_coords')
+        batch_name = data.get(
+            'batch_name', f"{discipline} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
 
         if not all([tender_id, file_paths, discipline, title_block_coords]):
             return jsonify({
                 'success': False,
-                'error': 'Missing required fields'
+                'error': 'Missing required fields: tender_id, file_paths, discipline, title_block_coords'
             }), 400
 
         user_info = extract_user_info(request.headers)
 
-        # Submit job to UiPath
-        job = uipath_client.submit_extraction_job(
+        logger.info(
+            f"Creating batch and queuing extraction for tender {tender_id}")
+
+        # Create batch first
+        batch = blob_service.create_batch(
             tender_id=tender_id,
-            file_paths=file_paths,
+            batch_name=batch_name,
             discipline=discipline,
+            file_paths=file_paths,
             title_block_coords=title_block_coords,
-            submitted_by=user_info.get('name', 'Unknown')
+            submitted_by=user_info.get('name', 'Unknown'),
+            job_id=None  # Will be updated after UiPath submission
         )
 
-        return jsonify({
-            'success': True,
-            'data': job
-        }), 202
+        # Update file categories and batch references
+        blob_service.update_files_category(
+            tender_id=tender_id,
+            file_paths=file_paths,
+            category=discipline,
+            batch_id=batch['batch_id']
+        )
+
+        # Submit job to UiPath with batch_id reference
+        try:
+            job = uipath_client.submit_extraction_job(
+                tender_id=tender_id,
+                file_paths=file_paths,
+                discipline=discipline,
+                title_block_coords=title_block_coords,
+                submitted_by=user_info.get('name', 'Unknown'),
+                batch_id=batch['batch_id']  # Pass batch_id to UiPath
+            )
+
+            # Update batch with job_id
+            batch['job_id'] = job.get('job_id')
+
+            # Note: In real implementation, we'd update the batch metadata blob with job_id
+            # For now, just return both in response
+
+            logger.info(
+                f"Successfully created batch {batch['batch_id']} and queued job {job.get('job_id')}")
+
+            return jsonify({
+                'success': True,
+                'data': {
+                    'batch_id': batch['batch_id'],
+                    'job_id': job.get('job_id'),
+                    'status': job.get('status'),
+                    'batch': batch
+                }
+            }), 202
+
+        except Exception as uipath_error:
+            # Rollback: delete batch if UiPath submission fails
+            logger.error(
+                f"UiPath submission failed, rolling back batch: {str(uipath_error)}")
+            blob_service.delete_batch(tender_id, batch['batch_id'])
+            raise
+
     except Exception as e:
+        logger.error(f"Failed to queue extraction: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)

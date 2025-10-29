@@ -336,11 +336,16 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
   const handleSubmit = async () => {
     try {
       setIsSubmitting(true);
+      
+      // Generate batch name based on discipline and timestamp
+      const batchName = `${discipline} Batch ${new Date().toLocaleString()}`;
+      
       await uipathApi.queueExtraction(
         tenderId,
         files.map(f => f.path),
         discipline,
-        coords
+        coords,
+        batchName
       );
       onSubmit();
     } catch (error) {

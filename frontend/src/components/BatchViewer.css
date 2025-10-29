@@ -1,0 +1,162 @@
+.batch-viewer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.batch-viewer-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+    text-align: center;
+    color: #666;
+}
+
+.batch-viewer-header {
+    background: white;
+    border-bottom: 2px solid #eee;
+    padding: 0.75rem 1rem;
+    flex-shrink: 0;
+}
+
+.close-button {
+    padding: 0.5rem 1rem;
+    background-color: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: #333;
+    transition: all 0.2s ease;
+    margin-bottom: 0.5rem;
+}
+
+.close-button:hover {
+    background-color: #e0e0e0;
+    border-color: #ccc;
+}
+
+.header-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.batch-viewer-title {
+    margin: 0;
+    font-size: 1.25rem;
+    color: #333;
+}
+
+.header-metadata {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    font-size: 0.85rem;
+}
+
+.metadata-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: #555;
+}
+
+.metadata-item strong {
+    color: #333;
+    font-weight: 600;
+}
+
+.job-id-item {
+    font-family: 'Courier New', monospace;
+    font-size: 0.8rem;
+    color: #666;
+}
+
+.coords-item {
+    color: #666;
+    font-size: 0.8rem;
+}
+
+.status-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    display: inline-block;
+}
+
+.status-pending {
+    background-color: #fff4ce;
+    color: #8a6d3b;
+}
+
+.status-running {
+    background-color: #cfe2ff;
+    color: #084298;
+}
+
+.status-completed {
+    background-color: #d1e7dd;
+    color: #0f5132;
+}
+
+.status-failed {
+    background-color: #f8d7da;
+    color: #842029;
+}
+
+.batch-files-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.batch-files-section .file-browser {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.read-only-badge {
+    font-size: 0.8rem;
+    color: #666;
+    font-weight: normal;
+    margin-left: 0.5rem;
+}
+
+.file-item.read-only {
+    cursor: default;
+    padding-left: 1rem;
+}
+
+.file-item.read-only:hover {
+    background-color: #f9f9f9;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .batch-viewer-header {
+        padding: 0.5rem;
+    }
+
+    .batch-viewer-title {
+        font-size: 1.1rem;
+    }
+
+    .header-metadata {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .close-button {
+        width: 100%;
+    }
+}

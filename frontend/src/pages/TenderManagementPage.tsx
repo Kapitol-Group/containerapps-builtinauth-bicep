@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { tendersApi, filesApi, configApi } from '../services/api';
-import { Tender, TenderFile } from '../types';
+import { tendersApi, filesApi, configApi, batchesApi } from '../services/api';
+import { Tender, TenderFile, Batch, BatchWithFiles } from '../types';
 import FileUploadZone from '../components/FileUploadZone';
 import SharePointFileBrowser from '../components/SharePointFileBrowser';
 import FileBrowser from '../components/FileBrowser';
 import FilePreview from '../components/FilePreview';
 import ExtractionModal from '../components/ExtractionModal';
+import FileBrowserTabs, { TabType } from '../components/FileBrowserTabs';
+import BatchList from '../components/BatchList';
+import BatchViewer from '../components/BatchViewer';
 import Dialog from '../components/Dialog';
 import './TenderManagementPage.css';
 
@@ -16,6 +19,7 @@ const TenderManagementPage: React.FC = () => {
   
   const [tender, setTender] = useState<Tender | null>(null);
   const [files, setFiles] = useState<TenderFile[]>([]);
+  const [activeFiles, setActiveFiles] = useState<TenderFile[]>([]);
   const [selectedFile, setSelectedFile] = useState<TenderFile | null>(null);
   const [showExtractionModal, setShowExtractionModal] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<TenderFile[]>([]);
@@ -27,11 +31,25 @@ const TenderManagementPage: React.FC = () => {
     title: '' 
   });
 
+  // Batch state
+  const [activeTab, setActiveTab] = useState<TabType>('files');
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [selectedBatch, setSelectedBatch] = useState<BatchWithFiles | null>(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  // Reload files when tab changes to ensure correct filtering
+  useEffect(() => {
+    if (tenderId && activeTab === 'files') {
+      loadFiles();
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     loadConfig();
     if (tenderId) {
       loadTender();
       loadFiles();
+      loadBatches();
     }
   }, [tenderId]);
 
@@ -58,13 +76,52 @@ const TenderManagementPage: React.FC = () => {
     if (!tenderId) return;
     try {
       setLoading(true);
-      const data = await filesApi.list(tenderId);
+      // When on "files" tab, exclude batched files
+      const excludeBatched = activeTab === 'files';
+      const data = await filesApi.list(tenderId, excludeBatched);
       setFiles(data);
+      
+      // Update activeFiles when in files tab
+      if (activeTab === 'files') {
+        setActiveFiles(data);
+      }
     } catch (error) {
       console.error('Failed to load files:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadBatches = async () => {
+    if (!tenderId) return;
+    try {
+      const data = await batchesApi.list(tenderId);
+      setBatches(data);
+    } catch (error) {
+      console.error('Failed to load batches:', error);
+    }
+  };
+
+  const handleBatchSelect = async (batchId: string) => {
+    if (!tenderId) return;
+    try {
+      setBatchLoading(true);
+      const data = await batchesApi.get(tenderId, batchId);
+      setSelectedBatch(data);
+    } catch (error) {
+      console.error('Failed to load batch:', error);
+      setAlertDialog({
+        show: true,
+        title: 'Error',
+        message: 'Failed to load batch details'
+      });
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const handleCloseBatchViewer = () => {
+    setSelectedBatch(null);
   };
 
   const handleFilesUploaded = async (uploadedFiles: File[]) => {
@@ -156,15 +213,39 @@ const TenderManagementPage: React.FC = () => {
         </div>
         
         <div className="file-workspace">
-          <FileBrowser
-            files={files}
-            selectedFile={selectedFile}
-            selectedFiles={selectedFiles}
-            onFileSelect={handleFileSelect}
-            onSelectionChange={setSelectedFiles}
-            onFileDelete={handleFileDelete}
-            loading={loading}
-          />
+          <FileBrowserTabs
+            activeTab={activeTab}
+            onTabChange={setActiveTab}
+            filesCount={activeFiles.length}
+            batchesCount={batches.length}
+          >
+            {activeTab === 'files' ? (
+              <FileBrowser
+                files={activeFiles}
+                selectedFile={selectedFile}
+                selectedFiles={selectedFiles}
+                onFileSelect={handleFileSelect}
+                onSelectionChange={setSelectedFiles}
+                onFileDelete={handleFileDelete}
+                loading={loading}
+              />
+            ) : selectedBatch ? (
+              <BatchViewer
+                batch={selectedBatch.batch}
+                files={selectedBatch.files}
+                onClose={handleCloseBatchViewer}
+                onFileSelect={handleFileSelect}
+                loading={batchLoading}
+              />
+            ) : (
+              <BatchList
+                batches={batches}
+                selectedBatchId={null}
+                onBatchSelect={handleBatchSelect}
+                loading={batchLoading}
+              />
+            )}
+          </FileBrowserTabs>
           
           <FilePreview file={selectedFile} tenderId={tenderId} />
         </div>
@@ -177,10 +258,21 @@ const TenderManagementPage: React.FC = () => {
           onClose={() => setShowExtractionModal(false)}
           onSubmit={() => {
             setShowExtractionModal(false);
+            
+            // Reload both files and batches
+            loadFiles();
+            loadBatches();
+            
+            // Clear selection
+            setSelectedFiles([]);
+            
+            // Switch to batches tab
+            setActiveTab('batches');
+            
             setAlertDialog({ 
               show: true, 
               title: 'Success', 
-              message: 'Extraction job queued successfully!' 
+              message: 'Batch submitted successfully! Files have been categorized and moved to Submitted Batches.' 
             });
           }}
         />

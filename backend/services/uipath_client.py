@@ -33,7 +33,8 @@ class UiPathClient:
 
     def submit_extraction_job(self, tender_id: str, file_paths: List[str],
                               discipline: str, title_block_coords: Dict,
-                              submitted_by: str = 'Unknown') -> Dict:
+                              submitted_by: str = 'Unknown',
+                              batch_id: Optional[str] = None) -> Dict:
         """
         Submit a drawing metadata extraction job to UiPath
 
@@ -43,6 +44,7 @@ class UiPathClient:
             discipline: Drawing discipline (e.g., 'Architectural', 'Structural')
             title_block_coords: Title block coordinates {x, y, width, height} in pixels
             submitted_by: User who submitted the job
+            batch_id: Optional batch identifier for tracking
 
         Returns:
             Job information dictionary
@@ -56,6 +58,7 @@ class UiPathClient:
                 'file_count': len(file_paths),
                 'submitted_at': datetime.utcnow().isoformat(),
                 'submitted_by': submitted_by,
+                'batch_id': batch_id,
                 'message': 'Mock job created (UiPath not configured)'
             }
 
@@ -67,6 +70,10 @@ class UiPathClient:
             'submitted_by': submitted_by,
             'submitted_at': datetime.utcnow().isoformat()
         }
+
+        # Include batch_id if provided
+        if batch_id:
+            payload['batch_id'] = batch_id
 
         try:
             response = requests.post(

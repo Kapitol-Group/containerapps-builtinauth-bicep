@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Tender, TenderFile, ExtractionJob, ApiResponse, TitleBlockCoords } from '../types';
+import { Tender, TenderFile, ExtractionJob, ApiResponse, TitleBlockCoords, Batch, BatchWithFiles } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || '/api';
 
@@ -61,8 +61,9 @@ export const tendersApi = {
 
 // Files API
 export const filesApi = {
-    list: async (tenderId: string): Promise<TenderFile[]> => {
-        const response = await api.get<ApiResponse<TenderFile[]>>(`/tenders/${tenderId}/files`);
+    list: async (tenderId: string, excludeBatched: boolean = false): Promise<TenderFile[]> => {
+        const params = excludeBatched ? { exclude_batched: 'true' } : {};
+        const response = await api.get<ApiResponse<TenderFile[]>>(`/tenders/${tenderId}/files`, { params });
         return response.data.data || [];
     },
 
@@ -112,13 +113,15 @@ export const uipathApi = {
         tenderId: string,
         filePaths: string[],
         discipline: string,
-        titleBlockCoords: TitleBlockCoords
-    ): Promise<ExtractionJob> => {
-        const response = await api.post<ApiResponse<ExtractionJob>>('/uipath/extract', {
+        titleBlockCoords: TitleBlockCoords,
+        batchName?: string
+    ): Promise<{ batch_id: string; job_id: string; status: string; batch: Batch }> => {
+        const response = await api.post<ApiResponse<{ batch_id: string; job_id: string; status: string; batch: Batch }>>('/uipath/extract', {
             tender_id: tenderId,
             file_paths: filePaths,
             discipline,
             title_block_coords: titleBlockCoords,
+            batch_name: batchName,
         });
 
         if (!response.data.success || !response.data.data) {
@@ -133,6 +136,34 @@ export const uipathApi = {
             throw new Error(response.data.error || 'Failed to fetch job status');
         }
         return response.data.data;
+    },
+};
+
+// Batches API
+export const batchesApi = {
+    list: async (tenderId: string): Promise<Batch[]> => {
+        const response = await api.get<ApiResponse<Batch[]>>(`/tenders/${tenderId}/batches`);
+        return response.data.data || [];
+    },
+
+    get: async (tenderId: string, batchId: string): Promise<BatchWithFiles> => {
+        const response = await api.get<ApiResponse<BatchWithFiles>>(`/tenders/${tenderId}/batches/${batchId}`);
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch batch');
+        }
+        return response.data.data;
+    },
+
+    updateStatus: async (tenderId: string, batchId: string, status: 'pending' | 'running' | 'completed' | 'failed'): Promise<Batch> => {
+        const response = await api.patch<ApiResponse<Batch>>(`/tenders/${tenderId}/batches/${batchId}`, { status });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to update batch status');
+        }
+        return response.data.data;
+    },
+
+    delete: async (tenderId: string, batchId: string): Promise<void> => {
+        await api.delete(`/tenders/${tenderId}/batches/${batchId}`);
     },
 };
 

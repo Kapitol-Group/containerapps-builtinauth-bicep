@@ -28,6 +28,7 @@ export interface TenderFile {
     uploaded_at: string | null;
     last_modified: string | null;
     source?: 'local' | 'sharepoint';
+    batch_id?: string;
 }
 
 export interface TitleBlockCoords {
@@ -35,6 +36,24 @@ export interface TitleBlockCoords {
     y: number;
     width: number;
     height: number;
+}
+
+export interface Batch {
+    batch_id: string;
+    batch_name: string;
+    discipline: string;
+    file_paths: string[];
+    title_block_coords: TitleBlockCoords;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    submitted_at: string;
+    submitted_by: string;
+    file_count: number;
+    job_id?: string;
+}
+
+export interface BatchWithFiles {
+    batch: Batch;
+    files: TenderFile[];
 }
 
 export interface ExtractionJob {
@@ -45,6 +64,7 @@ export interface ExtractionJob {
     submitted_at: string;
     submitted_by: string;
     message?: string;
+    batch_id?: string;
 }
 
 export interface ApiResponse<T> {

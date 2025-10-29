@@ -10,6 +10,7 @@ interface FileBrowserProps {
   onSelectionChange: (files: TenderFile[]) => void;
   onFileDelete?: (file: TenderFile) => void;
   loading: boolean;
+  readOnly?: boolean;
 }
 
 const FileBrowser: React.FC<FileBrowserProps> = ({ 
@@ -19,7 +20,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
   onFileSelect, 
   onSelectionChange, 
   onFileDelete,
-  loading 
+  loading,
+  readOnly = false
 }) => {
   const [confirmDelete, setConfirmDelete] = useState<{ show: boolean; file: TenderFile | null }>({ show: false, file: null });
   const handleFileClick = (file: TenderFile, event: React.MouseEvent) => {
@@ -89,8 +91,8 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
   return (
     <div className="file-browser">
       <div className="file-browser-header">
-        <h3>Files ({files.length})</h3>
-        {files.length > 0 && (
+        <h3>Files ({files.length}) {readOnly && <span className="read-only-badge">(Read-Only)</span>}</h3>
+        {files.length > 0 && !readOnly && (
           <button 
             className="select-all-btn"
             onClick={handleSelectAll}
@@ -105,21 +107,23 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
           {files.map(file => (
             <div 
               key={file.path}
-              className={`file-item ${selectedFile?.path === file.path ? 'active' : ''} ${isFileSelected(file) ? 'selected' : ''}`}
+              className={`file-item ${selectedFile?.path === file.path ? 'active' : ''} ${isFileSelected(file) ? 'selected' : ''} ${readOnly ? 'read-only' : ''}`}
               onClick={(e) => handleFileClick(file, e)}
             >
-              <input
-                type="checkbox"
-                checked={isFileSelected(file)}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  handleCheckboxChange(file, e.target.checked);
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
+              {!readOnly && (
+                <input
+                  type="checkbox"
+                  checked={isFileSelected(file)}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    handleCheckboxChange(file, e.target.checked);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              )}
               <span className="file-name">{file.name}</span>
               <span className="file-category">{file.category}</span>
-              {onFileDelete && (
+              {onFileDelete && !readOnly && (
                 <button
                   className="delete-file-btn"
                   onClick={(e) => handleDeleteClick(file, e)}
