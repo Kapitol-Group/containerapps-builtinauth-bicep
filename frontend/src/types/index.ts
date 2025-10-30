@@ -41,7 +41,8 @@ export interface TitleBlockCoords {
 export interface Batch {
     batch_id: string;
     batch_name: string;
-    discipline: string;
+    discipline?: string; // Legacy field, kept for backward compatibility
+    destination?: string; // New field: SharePoint destination folder
     file_paths: string[];
     title_block_coords: TitleBlockCoords;
     status: 'pending' | 'running' | 'completed' | 'failed';

@@ -552,16 +552,24 @@ def queue_extraction():
         data = request.json
         tender_id = data.get('tender_id')
         file_paths = data.get('file_paths', [])
+
+        # Support both 'discipline' (legacy) and 'destination' (new)
+        destination = data.get('destination')
+        # Fallback for backward compatibility
         discipline = data.get('discipline')
+
+        # Use destination if provided, otherwise fall back to discipline
+        category = destination or discipline
+
         # {x, y, width, height} in pixels
         title_block_coords = data.get('title_block_coords')
         batch_name = data.get(
-            'batch_name', f"{discipline} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
+            'batch_name', f"{category} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
 
-        if not all([tender_id, file_paths, discipline, title_block_coords]):
+        if not all([tender_id, file_paths, category, title_block_coords]):
             return jsonify({
                 'success': False,
-                'error': 'Missing required fields: tender_id, file_paths, discipline, title_block_coords'
+                'error': 'Missing required fields: tender_id, file_paths, destination (or discipline), title_block_coords'
             }), 400
 
         user_info = extract_user_info(request.headers)
@@ -569,11 +577,11 @@ def queue_extraction():
         logger.info(
             f"Creating batch and queuing extraction for tender {tender_id}")
 
-        # Create batch first
+        # Create batch first (with both discipline and destination for compatibility)
         batch = blob_service.create_batch(
             tender_id=tender_id,
             batch_name=batch_name,
-            discipline=discipline,
+            discipline=category,  # Store in discipline field for backward compatibility
             file_paths=file_paths,
             title_block_coords=title_block_coords,
             submitted_by=user_info.get('name', 'Unknown'),
@@ -584,7 +592,7 @@ def queue_extraction():
         blob_service.update_files_category(
             tender_id=tender_id,
             file_paths=file_paths,
-            category=discipline,
+            category=category,
             batch_id=batch['batch_id']
         )
 
@@ -593,7 +601,7 @@ def queue_extraction():
             job = uipath_client.submit_extraction_job(
                 tender_id=tender_id,
                 file_paths=file_paths,
-                discipline=discipline,
+                discipline=category,  # Pass as discipline for UiPath compatibility
                 title_block_coords=title_block_coords,
                 submitted_by=user_info.get('name', 'Unknown'),
                 batch_id=batch['batch_id']  # Pass batch_id to UiPath
@@ -665,6 +673,96 @@ def validate_sharepoint_path():
             'message': 'SharePoint validation not yet implemented'
         })
     except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.post('/api/sharepoint/list-folders')
+def list_sharepoint_folders():
+    """List subfolders in a SharePoint folder using Graph API"""
+    try:
+        data = request.json
+        access_token = data.get('access_token')
+        drive_id = data.get('drive_id')  # output_library_id
+        folder_path = data.get('folder_path')  # output_folder_path
+
+        if not access_token or not drive_id or not folder_path:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameters: access_token, drive_id, folder_path'
+            }), 400
+
+        import requests
+
+        # Handle two possible path formats:
+        # 1. Full Graph API format: "/drives/{drive-id}/root:/path"
+        # 2. Simple path format: "/path"
+
+        if folder_path.startswith('/drives/'):
+            # Extract the actual path from the full Graph API format
+            # Format: /drives/{drive-id}/root:/actual/path
+            logger.info(
+                f"Folder path is in full Graph API format: {folder_path}")
+
+            # Find the "/root:" part and extract what comes after it
+            root_index = folder_path.find('/root:')
+            if root_index != -1:
+                actual_path = folder_path[root_index + 6:]  # Skip "/root:"
+                logger.info(f"Extracted actual path: {actual_path}")
+
+                # Construct Graph API URL using the extracted path
+                graph_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:{actual_path}:/children"
+            else:
+                # Fallback: use the full path as-is (shouldn't happen but handle it)
+                logger.warning(f"Could not find '/root:' in path, using as-is")
+                graph_url = f"https://graph.microsoft.com/v1.0{folder_path}:/children"
+        else:
+            # Simple path format - construct the full URL
+            logger.info(f"Folder path is in simple format: {folder_path}")
+            graph_url = f"https://graph.microsoft.com/v1.0/drives/{drive_id}/root:{folder_path}:/children"
+
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json'
+        }
+
+        logger.info(f"Fetching folders from: {graph_url}")
+
+        response = requests.get(graph_url, headers=headers)
+
+        if not response.ok:
+            error_text = response.text
+            logger.error(f"Graph API error: {error_text}")
+            return jsonify({
+                'success': False,
+                'error': f'Graph API request failed: {response.status_code} - {error_text}'
+            }), response.status_code
+
+        result = response.json()
+
+        # Filter to only include folders (items with 'folder' property)
+        folders = []
+        for item in result.get('value', []):
+            if 'folder' in item:
+                folders.append({
+                    'name': item.get('name'),
+                    'id': item.get('id'),
+                    # Just return the folder name, not full path
+                    'path': item.get('name')
+                })
+
+        logger.info(f"Found {len(folders)} folders")
+
+        return jsonify({
+            'success': True,
+            'data': folders
+        })
+
+    except Exception as e:
+        logger.error(
+            f"Failed to list SharePoint folders: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)

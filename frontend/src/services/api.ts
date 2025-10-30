@@ -173,6 +173,18 @@ export const sharepointApi = {
         const response = await api.post<ApiResponse<{ valid: boolean }>>('/sharepoint/validate', { path });
         return response.data.data?.valid || false;
     },
+
+    listFolders: async (accessToken: string, driveId: string, folderPath: string): Promise<Array<{ name: string; id: string; path: string }>> => {
+        const response = await api.post<ApiResponse<Array<{ name: string; id: string; path: string }>>>('/sharepoint/list-folders', {
+            access_token: accessToken,
+            drive_id: driveId,
+            folder_path: folderPath
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to list SharePoint folders');
+        }
+        return response.data.data;
+    },
 };
 
 // Health check

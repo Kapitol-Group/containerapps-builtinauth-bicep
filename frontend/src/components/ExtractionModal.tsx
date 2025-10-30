@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { TenderFile, TitleBlockCoords } from '../types';
-import { uipathApi, filesApi } from '../services/api';
+import { uipathApi, filesApi, tendersApi, sharepointApi } from '../services/api';
+import { getGraphApiToken } from '../authConfig';
 import Dialog from './Dialog';
 import './CreateTenderModal.css';
 import './ExtractionModal.css';
@@ -21,7 +22,9 @@ interface ExtractionModalProps {
 }
 
 const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onClose, onSubmit }) => {
-  const [discipline, setDiscipline] = useState('Architectural');
+  const [destination, setDestination] = useState('');
+  const [destinations, setDestinations] = useState<Array<{ name: string; path: string }>>([]);
+  const [isLoadingDestinations, setIsLoadingDestinations] = useState(false);
   const [coords, setCoords] = useState<TitleBlockCoords>({ x: 0, y: 0, width: 100, height: 50 });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
@@ -38,6 +41,59 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
   const renderTaskRef = useRef<any>(null);
   const animationFrameRef = useRef<number | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null); // Store rendered PDF
+
+  // Load destinations from SharePoint on mount
+  useEffect(() => {
+    const loadDestinations = async () => {
+      setIsLoadingDestinations(true);
+      try {
+        // Get tender details to retrieve output location
+        const tender = await tendersApi.get(tenderId);
+        
+        if (!tender.output_library_id || !tender.output_folder_path) {
+          console.warn('Tender missing output location configuration');
+          setDestinations([]);
+          setIsLoadingDestinations(false);
+          return;
+        }
+        
+        // Get Graph API token
+        const accessToken = await getGraphApiToken('https://graph.microsoft.com');
+        
+        if (!accessToken) {
+          console.error('Failed to get Graph API token');
+          setDestinations([]);
+          setIsLoadingDestinations(false);
+          return;
+        }
+        
+        // Fetch folders from SharePoint
+        const folders = await sharepointApi.listFolders(
+          accessToken,
+          tender.output_library_id,
+          tender.output_folder_path
+        );
+        
+        setDestinations(folders.map(f => ({ name: f.name, path: f.path })));
+        
+        // Set first folder as default if available
+        if (folders.length > 0) {
+          setDestination(folders[0].name);
+        }
+        
+      } catch (error) {
+        console.error('Failed to load destinations:', error);
+        setErrorDialog({ 
+          show: true, 
+          message: 'Failed to load destination folders from SharePoint. Please check the output location configuration.' 
+        });
+      } finally {
+        setIsLoadingDestinations(false);
+      }
+    };
+    
+    loadDestinations();
+  }, [tenderId]);
 
   useEffect(() => {
     return () => {
@@ -337,13 +393,20 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
     try {
       setIsSubmitting(true);
       
-      // Generate batch name based on discipline and timestamp
-      const batchName = `${discipline} Batch ${new Date().toLocaleString()}`;
+      // Validate destination is selected
+      if (!destination) {
+        setErrorDialog({ show: true, message: 'Please select a destination folder.' });
+        setIsSubmitting(false);
+        return;
+      }
+      
+      // Generate batch name based on destination and timestamp
+      const batchName = `${destination} Batch ${new Date().toLocaleString()}`;
       
       await uipathApi.queueExtraction(
         tenderId,
         files.map(f => f.path),
-        discipline,
+        destination,
         coords,
         batchName
       );
@@ -376,13 +439,24 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
         </div>
 
         <div className="form-group">
-          <label>Discipline</label>
-          <select value={discipline} onChange={(e) => setDiscipline(e.target.value)}>
-            <option>Architectural</option>
-            <option>Structural</option>
-            <option>Mechanical</option>
-            <option>Electrical</option>
-          </select>
+          <label>Destination</label>
+          {isLoadingDestinations ? (
+            <select disabled>
+              <option>Loading folders...</option>
+            </select>
+          ) : destinations.length > 0 ? (
+            <select value={destination} onChange={(e) => setDestination(e.target.value)}>
+              {destinations.map((dest) => (
+                <option key={dest.name} value={dest.name}>
+                  {dest.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select disabled>
+              <option>No destination folders available</option>
+            </select>
+          )}
         </div>
         
         <div className="form-group">
