@@ -121,8 +121,7 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
                   onClick={(e) => e.stopPropagation()}
                 />
               )}
-              <span className="file-name">{file.name}</span>
-              <span className="file-category">{file.category}</span>
+              <span className="file-name" title={file.name}>{file.name}</span>
               {onFileDelete && !readOnly && (
                 <button
                   className="delete-file-btn"
