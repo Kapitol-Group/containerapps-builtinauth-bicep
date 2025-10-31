@@ -2,6 +2,9 @@
     "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
     "contentVersion": "1.0.0.0",
     "parameters": {
+      "resourceGroupName": {
+        "value": "${AZURE_RESOURCE_GROUP}"
+      },
       "name": {
         "value": "${AZURE_ENV_NAME}"
       },
@@ -15,10 +18,34 @@
         "value": "${AZURE_SERVICE_MANAGEMENT_REFERENCE}"
       },
       "acaExists": {
-        "value": "${SERVICE_ACA_RESOURCE_EXISTS=false}"
+        "value": "${SERVICE_ACA_RESOURCE_EXISTS}"
       },
       "includeTokenStore": {
         "value": "${USE_ACA_TOKEN_STORE=false}"
+      },
+      "storageAccountName": {
+        "value": "${AZURE_STORAGE_ACCOUNT}"
+      },
+      "cosmosDbAccountName": {
+        "value": "${AZURE_COSMOSDB_ACCOUNT}"
+      },
+      "containerAppEnvName": {
+        "value": "${AZURE_CONTAINER_ENVIRONMENT_NAME}"
+      },
+      "serviceAcaUri": {
+        "value": "${SERVICE_ACA_URI}"
+      },
+      "serviceAcaName": {
+        "value": "${SERVICE_ACA_NAME}"
+      },
+      "serviceAcaIdentityPrincipalId": {
+        "value": "${SERVICE_ACA_IDENTITY_PRINCIPAL_ID}"
+      },
+      "containerRegistryName": {
+        "value": "${AZURE_CONTAINER_REGISTRY_NAME}"
+      },
+      "containerRegistryEndpoint": {
+        "value": "${AZURE_CONTAINER_REGISTRY_ENDPOINT}"
       }
     }
-  }
+}
