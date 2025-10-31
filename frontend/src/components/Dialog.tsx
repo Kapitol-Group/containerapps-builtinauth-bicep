@@ -42,7 +42,7 @@ const Dialog: React.FC<DialogProps> = ({
 
   return (
     <div className="dialog-overlay" onClick={handleBackdropClick}>
-      <div className="dialog-box">
+      <div className="dialog-box" onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <h3>{title}</h3>
         </div>

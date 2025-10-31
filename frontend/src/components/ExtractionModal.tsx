@@ -25,12 +25,13 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
   const [destination, setDestination] = useState('');
   const [destinations, setDestinations] = useState<Array<{ name: string; path: string }>>([]);
   const [isLoadingDestinations, setIsLoadingDestinations] = useState(false);
-  const [coords, setCoords] = useState<TitleBlockCoords>({ x: 0, y: 0, width: 100, height: 50 });
+  const [coords, setCoords] = useState<TitleBlockCoords>({ x: 0, y: 0, width: 0, height: 0 });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
+  const [requiresTitleBlock, setRequiresTitleBlock] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
@@ -400,6 +401,13 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
         return;
       }
       
+      // Validate title block region if required
+      if (requiresTitleBlock && (coords.x === 0 && coords.y === 0 && coords.width === 0 && coords.height === 0)) {
+        setErrorDialog({ show: true, message: 'Please define a title block region before submitting.' });
+        setIsSubmitting(false);
+        return;
+      }
+      
       // Generate batch name based on destination and timestamp
       const batchName = `${destination} Batch ${new Date().toLocaleString()}`;
       
@@ -459,19 +467,37 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
           )}
         </div>
         
-        <div className="form-group">
-          <label>Title Block Region</label>
-          <button 
-            type="button"
-            className="btn-secondary" 
-            onClick={handleOpenRegionSelector}
-            style={{ width: '100%', marginTop: '0.5rem' }}
+        <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <input 
+            type="checkbox" 
+            id="requiresTitleBlock"
+            checked={requiresTitleBlock} 
+            onChange={(e) => setRequiresTitleBlock(e.target.checked)}
+            style={{ cursor: 'pointer', width: '18px', height: '18px', margin: 0 }}
+          />
+          <label 
+            htmlFor="requiresTitleBlock" 
+            style={{ cursor: 'pointer', fontWeight: 'normal', margin: 0 }}
           >
-            {coords.width > 0 && coords.height > 0 
-              ? `Selected: ${coords.width}×${coords.height}px at (${coords.x}, ${coords.y})`
-              : 'Select Title Block Region'}
-          </button>
+            Requires Title Block Processing
+          </label>
         </div>
+        
+        {requiresTitleBlock && (
+          <div className="form-group">
+            <label>Define Title Block Region</label>
+            <button 
+              type="button"
+              className="btn-secondary" 
+              onClick={handleOpenRegionSelector}
+              style={{ width: '100%', marginTop: '0.5rem' }}
+            >
+              {coords.width > 0 && coords.height > 0 
+                ? `Selected: ${coords.width}×${coords.height}px at (${coords.x}, ${coords.y})`
+                : 'Select Title Block Region'}
+            </button>
+          </div>
+        )}
 
         {showRegionSelector && (
           <div className="region-selector-modal" onClick={handleCloseRegionSelector}>
