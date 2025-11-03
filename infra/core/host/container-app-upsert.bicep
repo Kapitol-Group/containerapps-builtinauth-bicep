@@ -2,9 +2,11 @@ param name string
 param location string = resourceGroup().location
 param tags object = {}
 
+
 param containerAppsEnvironmentName string
 param containerName string = 'main'
 param containerRegistryName string
+param logAnalyticsWorkspaceName string
 
 @description('Minimum number of replicas to run')
 @minValue(1)
@@ -55,6 +57,7 @@ module app 'container-app.bicep' = {
     containerName: containerName
     containerAppsEnvironmentName: containerAppsEnvironmentName
     containerRegistryName: containerRegistryName
+    logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
     containerCpuCoreCount: containerCpuCoreCount
     containerMemory: containerMemory
     containerMinReplicas: containerMinReplicas

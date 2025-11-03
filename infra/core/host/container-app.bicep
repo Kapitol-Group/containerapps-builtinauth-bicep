@@ -2,9 +2,11 @@ param name string
 param location string = resourceGroup().location
 param tags object = {}
 
+
 param containerAppsEnvironmentName string
 param containerName string = 'main'
 param containerRegistryName string
+param logAnalyticsWorkspaceName string
 
 @description('Minimum number of replicas to run')
 @minValue(1)
@@ -108,8 +110,23 @@ resource app 'Microsoft.App/containerApps@2022-03-01' = {
   }
 }
 
-resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2022-03-01' existing = {
+resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' existing = {
+  name: logAnalyticsWorkspaceName
+}
+
+resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2022-03-01' = {
   name: containerAppsEnvironmentName
+  location: location
+  tags: {} // Empty tags - only the container app should have azd-service-name
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: logAnalyticsWorkspace.properties.customerId
+        sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
+      }
+    }
+  }
 }
 
 // 2022-02-01-preview needed for anonymousPullEnabled

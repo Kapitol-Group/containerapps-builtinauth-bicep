@@ -1,9 +1,17 @@
 targetScope = 'resourceGroup'
 
+
 @description('Environment name')
 param name string
 @description('Primary location for all resources')
 param location string
+
+@description('Container Apps Environment name')
+param containerAppEnvName string
+@description('Container Registry name')
+param containerRegistryName string
+@description('Whether the ACA resource already exists')
+param acaExists bool = false
 
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
@@ -19,6 +27,16 @@ module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
   }
 }
 
+module containerRegistry 'core/host/container-registry.bicep' = {
+  name: 'containerregistry'
+  params: {
+    name: containerRegistryName
+    location: location
+    tags: tags
+    workspaceId: logAnalyticsWorkspace.outputs.id
+  }
+}
+
 module aca 'aca.bicep' = {
   name: 'aca'
   params: {
@@ -26,14 +44,20 @@ module aca 'aca.bicep' = {
     location: location
     tags: tags
     identityName: '${prefix}-id-aca'
-    containerAppsEnvironmentName: 'KAP-Scheduler-k6bs5y5rvwus2-containerapps-env'
-    containerRegistryName: 'kapschedulerk6bs5y5rvwus2registry'
-    exists: false
+    containerAppsEnvironmentName: containerAppEnvName
+    containerRegistryName: containerRegistryName
+    logAnalyticsWorkspaceName: logAnalyticsWorkspace.outputs.name
+    exists: acaExists
   }
+  dependsOn: [
+    containerRegistry
+  ]
 }
 
 output AZURE_LOCATION string = location
 output AZURE_TENANT_ID string = tenant().tenantId
+output AZURE_CONTAINER_REGISTRY_NAME string = containerRegistry.outputs.name
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerRegistry.outputs.loginServer
 output SERVICE_ACA_IDENTITY_PRINCIPAL_ID string = aca.outputs.identityPrincipalId
 output SERVICE_ACA_NAME string = aca.outputs.name
 output SERVICE_ACA_URI string = aca.outputs.uri

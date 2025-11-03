@@ -1,9 +1,11 @@
+
 param name string
 param location string = resourceGroup().location
 param tags object = {}
 param identityName string
 param containerAppsEnvironmentName string
 param containerRegistryName string
+param logAnalyticsWorkspaceName string
 param exists bool
 
 resource acaIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -22,6 +24,7 @@ module app 'core/host/container-app-upsert.bicep' = {
     exists: exists
     containerAppsEnvironmentName: containerAppsEnvironmentName
     containerRegistryName: containerRegistryName
+    logAnalyticsWorkspaceName: logAnalyticsWorkspaceName
     env: []
     targetPort: 50505
     secrets: [
