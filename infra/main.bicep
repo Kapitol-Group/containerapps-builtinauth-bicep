@@ -12,6 +12,14 @@ param containerAppEnvName string
 param containerRegistryName string
 @description('Whether the ACA resource already exists')
 param acaExists bool = false
+@description('Cosmos DB Account name')
+param cosmosDbAccountName string
+@description('Chat history database name')
+param chatHistoryDatabase string
+@description('Chat history container name for KapCoach')
+param chatHistoryContainerKapCoach string
+@description('Topic history container name for KapCoach')
+param topicHistoryContainerKapCoach string
 
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
@@ -47,6 +55,10 @@ module aca 'aca.bicep' = {
     containerAppsEnvironmentName: containerAppEnvName
     containerRegistryName: containerRegistryName
     logAnalyticsWorkspaceName: logAnalyticsWorkspace.outputs.name
+    cosmosDbAccountName: cosmosDbAccountName
+    chatHistoryDatabase: chatHistoryDatabase
+    chatHistoryContainerKapCoach: chatHistoryContainerKapCoach
+    topicHistoryContainerKapCoach: topicHistoryContainerKapCoach
     exists: acaExists
   }
   dependsOn: [

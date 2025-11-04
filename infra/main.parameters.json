@@ -46,6 +46,15 @@
       },
       "containerRegistryEndpoint": {
         "value": "${AZURE_CONTAINER_REGISTRY_ENDPOINT}"
+      },
+      "chatHistoryDatabase": {
+        "value": "${AZURE_CHAT_HISTORY_DATABASE}"
+      },
+      "chatHistoryContainerKapCoach": {
+        "value": "${AZURE_CHAT_HISTORY_CONTAINER_KAPCOACH}"
+      },
+      "topicHistoryContainerKapCoach": {
+        "value": "${AZURE_TOPIC_HISTORY_CONTAINER_KAPCOACH}"
       }
     }
 }
