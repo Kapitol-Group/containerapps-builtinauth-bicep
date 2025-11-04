@@ -194,48 +194,43 @@ class BlobStorageService:
 
         logger.info(f"Deleting tender: {tender_id}")
 
-        # Delete all blobs with the tender_id prefix
+        # List all blobs with the tender_id prefix
         blob_list = self.container_client.list_blobs(
             name_starts_with=f"{tender_id}/")
 
         deleted_count = 0
         errors = []
 
-        # Separate files and directories
-        files_to_delete = []
-        directories = []
-
+        # Collect all blob names (including directories in hierarchical namespace)
+        all_blobs = []
         for blob in blob_list:
-            # Skip only directory markers (blobs ending with /)
-            # Keep .tender_metadata and actual files even if size is 0
-            if blob.name.endswith('/'):
-                directories.append(blob.name)
-                logger.debug(f"Skipping directory marker: {blob.name}")
-                continue
-
-            files_to_delete.append(blob.name)
+            all_blobs.append(blob.name)
 
         logger.info(
-            f"Found {len(files_to_delete)} files and {len(directories)} directory markers for tender {tender_id}")
+            f"Found {len(all_blobs)} items to delete for tender {tender_id}")
 
-        # Delete all files (directories will be removed automatically in hierarchical namespace)
-        for blob_name in files_to_delete:
+        # Sort in reverse order to delete nested items first (deepest paths first)
+        # This ensures files are deleted before their parent directories
+        all_blobs.sort(reverse=True)
+
+        # Delete all blobs
+        for blob_name in all_blobs:
             try:
                 blob_client = self.container_client.get_blob_client(blob_name)
                 blob_client.delete_blob()
                 deleted_count += 1
-                logger.debug(f"Deleted blob: {blob_name}")
+                logger.debug(f"Deleted: {blob_name}")
             except Exception as e:
-                error_msg = f"Failed to delete blob {blob_name}: {str(e)}"
+                error_msg = f"Failed to delete {blob_name}: {str(e)}"
                 logger.error(error_msg)
                 errors.append(error_msg)
 
         logger.info(
-            f"Successfully deleted {deleted_count} files for tender {tender_id}")
+            f"Successfully deleted {deleted_count} items for tender {tender_id}")
 
         if errors:
             raise Exception(
-                f"Failed to delete some files: {'; '.join(errors)}")
+                f"Failed to delete some items: {'; '.join(errors)}")
 
     def list_files(self, tender_id: str, exclude_batched: bool = False) -> List[Dict]:
         """
