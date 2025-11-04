@@ -6,6 +6,8 @@ param name string
 @description('Primary location for all resources')
 param location string
 
+@description('Container App name')
+param serviceAcaName string = name
 @description('Container Apps Environment name')
 param containerAppEnvName string
 @description('Container Registry name')
@@ -48,7 +50,7 @@ module containerRegistry 'core/host/container-registry.bicep' = {
 module aca 'aca.bicep' = {
   name: 'aca'
   params: {
-    name: name
+    name: serviceAcaName
     location: location
     tags: tags
     identityName: '${prefix}-id-aca'
