@@ -22,6 +22,8 @@ RUN pip3 install -r requirements.txt
 
 COPY backend/ .
 
+RUN pip3 install -e ./entity-store-transformation-client
+
 # Copy built frontend from previous stage
 COPY --from=frontend-build /frontend/build ./frontend_build
 
