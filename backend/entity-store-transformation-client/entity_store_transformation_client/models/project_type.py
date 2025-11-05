@@ -1,0 +1,23 @@
+from enum import IntEnum
+
+
+class ProjectType(IntEnum):
+    AGED_CARE = 21
+    AVIATIONAIRPORTDEV = 19
+    CIVIC = 8
+    COMMERCIAL = 22
+    COMMERCIAL_FITOUT_REFURBISHMENT = 17
+    DEFENCE = 14
+    EDUCATION = 12
+    HEALTHCARE = 11
+    HOSPITALITY = 18
+    HOTEL = 9
+    INDUSTRIALINCLUDINGGFACILITIES = 13
+    INFRASTRUCTUREROADRAIL = 20
+    RESIDENTIAL_BTRBTS = 2
+    RETAIL = 15
+    SPORTS_RECREATION = 16
+    STUDENT_ACCOMMODATION = 10
+
+    def __str__(self) -> str:
+        return str(self.value)
