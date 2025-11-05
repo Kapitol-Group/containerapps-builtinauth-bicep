@@ -85,7 +85,14 @@ const LandingPage: React.FC = () => {
   return (
     <div className="landing-page">
       <header className="header">
-        <h1>Construction Tender Document Automation</h1>
+        <div className="header-title">
+          <img 
+            src="/Kapitol_Monogram_RGB_Teal-Black.jpg" 
+            alt="Kapitol Logo" 
+            className="header-logo"
+          />
+          <h1>Construction Tender Document Automation</h1>
+        </div>
         <div className="header-actions">
           <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
             + Create New Tender

@@ -12,6 +12,17 @@
     align-items: center;
 }
 
+.header-title {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.header-logo {
+    height: 50px;
+    width: auto;
+}
+
 .header h1 {
     margin: 0;
     color: var(--primary-color);
