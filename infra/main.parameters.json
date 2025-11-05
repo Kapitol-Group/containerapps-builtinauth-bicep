@@ -1,24 +1,30 @@
 {
-    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-    "contentVersion": "1.0.0.0",
-    "parameters": {
-      "name": {
-        "value": "${AZURE_ENV_NAME}"
-      },
-      "location": {
-        "value": "${AZURE_LOCATION}"
-      },
-      "principalId": {
-        "value": "${AZURE_PRINCIPAL_ID}"
-      },
-      "serviceManagementReference": {
-        "value": "${AZURE_SERVICE_MANAGEMENT_REFERENCE}"
-      },
-      "acaExists": {
-        "value": "${SERVICE_ACA_RESOURCE_EXISTS=false}"
-      },
-      "includeTokenStore": {
-        "value": "${USE_ACA_TOKEN_STORE=false}"
-      }
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "name": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "principalId": {
+      "value": "${AZURE_PRINCIPAL_ID}"
+    },
+    "serviceManagementReference": {
+      "value": "${AZURE_SERVICE_MANAGEMENT_REFERENCE}"
+    },
+    "acaExists": {
+      "value": "${SERVICE_ACA_RESOURCE_EXISTS=false}"
+    },
+    "includeTokenStore": {
+      "value": "${USE_ACA_TOKEN_STORE=false}"
+    },
+    "customHostName": {
+      "value": "${CUSTOM_HOST_NAME}"
+    },
+    "customCertificateName": {
+      "value": "${CUSTOM_CERTIFICATE_NAME}"
     }
   }
+}

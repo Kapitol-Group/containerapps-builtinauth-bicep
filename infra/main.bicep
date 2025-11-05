@@ -11,6 +11,12 @@ param location string
 
 param acaExists bool = false
 
+@description('Custom domain hostname (optional)')
+param customHostName string = ''
+
+@description('Custom domain certificate name (optional)')
+param customCertificateName string = ''
+
 // A token store is only needed if the app needs to access the Entra access tokens
 // https://learn.microsoft.com/azure/container-apps/token-store
 param includeTokenStore bool = true
@@ -87,6 +93,8 @@ module aca 'aca.bicep' = {
     entraClientId: '' // Will be updated via appupdate
     entraTenantId: tenant().tenantId
     sharePointBaseUrl: sharePointBaseUrl
+    customHostName: customHostName
+    customCertificateName: customCertificateName
   }
 }
 
@@ -112,6 +120,7 @@ module registration 'appregistration.bicep' = {
     webAppIdentityId: aca.outputs.identityPrincipalId
     issuer: issuer
     serviceManagementReference: serviceManagementReference
+    customHostName: customHostName
   }
 }
 

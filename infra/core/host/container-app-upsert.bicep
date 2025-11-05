@@ -30,7 +30,7 @@ param ingressEnabled bool = true
 param daprEnabled bool = false
 @description('Dapr app ID')
 param daprAppId string = containerName
-@allowed([ 'http', 'grpc' ])
+@allowed(['http', 'grpc'])
 @description('Protocol used by Dapr to connect to the app, e.g. http or grpc')
 param daprAppProtocol string = 'http'
 
@@ -39,6 +39,12 @@ param containerCpuCoreCount string = '0.5'
 
 @description('Memory allocated to a single container instance, e.g. 1Gi')
 param containerMemory string = '1.0Gi'
+
+@description('Custom domain hostname (optional)')
+param customHostName string = ''
+
+@description('Custom domain certificate name (optional)')
+param customCertificateName string = ''
 
 resource existingApp 'Microsoft.App/containerApps@2022-03-01' existing = if (exists) {
   name: name
@@ -67,6 +73,8 @@ module app 'container-app.bicep' = {
     env: env
     imageName: exists ? existingApp.properties.template.containers[0].image : ''
     targetPort: targetPort
+    customHostName: customHostName
+    customCertificateName: customCertificateName
   }
 }
 

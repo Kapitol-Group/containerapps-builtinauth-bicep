@@ -21,6 +21,12 @@ param entraClientId string = ''
 param entraTenantId string = ''
 param sharePointBaseUrl string = ''
 
+@description('Custom domain hostname (optional)')
+param customHostName string = ''
+
+@description('Custom domain certificate name (optional)')
+param customCertificateName string = ''
+
 resource acaIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
   location: location
@@ -113,6 +119,8 @@ module app 'core/host/container-app-upsert.bicep' = {
     env: allEnvVars
     targetPort: 50505
     secrets: allSecrets
+    customHostName: customHostName
+    customCertificateName: customCertificateName
   }
 }
 

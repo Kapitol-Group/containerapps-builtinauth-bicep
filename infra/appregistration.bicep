@@ -48,12 +48,23 @@ param issuer string
 
 param webAppEndpoint string
 
+@description('Custom domain hostname (optional)')
+param customHostName string = ''
+
 // Get the MS Graph Service Principal based on its application ID:
 // https://learn.microsoft.com/troubleshoot/entra/entra-id/governance/verify-first-party-apps-sign-in
 var msGraphAppId = '00000003-0000-0000-c000-000000000000'
 resource msGraphSP 'Microsoft.Graph/servicePrincipals@v1.0' existing = {
   appId: msGraphAppId
 }
+
+// Build redirect URIs array with custom domain if provided
+var baseRedirectUris = [
+  'http://localhost:50505/.auth/login/aad/callback'
+  '${webAppEndpoint}/.auth/login/aad/callback'
+]
+var customDomainRedirectUri = !empty(customHostName) ? ['https://${customHostName}/.auth/login/aad/callback'] : []
+var allRedirectUris = concat(baseRedirectUris, customDomainRedirectUri)
 
 var graphScopes = msGraphSP.oauth2PermissionScopes
 resource clientApp 'Microsoft.Graph/applications@v1.0' = {
@@ -62,10 +73,7 @@ resource clientApp 'Microsoft.Graph/applications@v1.0' = {
   signInAudience: 'AzureADMyOrg'
   serviceManagementReference: empty(serviceManagementReference) ? null : serviceManagementReference
   web: {
-    redirectUris: [
-      'http://localhost:50505/.auth/login/aad/callback'
-      '${webAppEndpoint}/.auth/login/aad/callback'
-    ]
+    redirectUris: allRedirectUris
     implicitGrantSettings: { enableIdTokenIssuance: true }
   }
   requiredResourceAccess: [

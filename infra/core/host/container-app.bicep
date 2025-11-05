@@ -30,7 +30,7 @@ param ingressEnabled bool = true
 param daprEnabled bool = false
 @description('Dapr app ID')
 param daprAppId string = containerName
-@allowed([ 'http', 'grpc' ])
+@allowed(['http', 'grpc'])
 @description('Protocol used by Dapr to connect to the app, e.g. http or grpc')
 param daprAppProtocol string = 'http'
 
@@ -39,6 +39,12 @@ param containerCpuCoreCount string = '0.5'
 
 @description('Memory allocated to a single container instance, e.g. 1Gi')
 param containerMemory string = '1.0Gi'
+
+@description('Custom domain hostname (optional)')
+param customHostName string = ''
+
+@description('Custom domain certificate name (optional)')
+param customCertificateName string = ''
 
 resource userIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: identityName
@@ -60,7 +66,7 @@ resource app 'Microsoft.App/containerApps@2022-03-01' = {
   // otherwise the container app will throw a provision error
   // This also forces us to use an user assigned managed identity since there would no way to 
   // provide the system assigned identity with the ACR pull access before the app is created
-  dependsOn: [ containerRegistryAccess ]
+  dependsOn: [containerRegistryAccess]
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: { '${userIdentity.id}': {} }
@@ -69,17 +75,34 @@ resource app 'Microsoft.App/containerApps@2022-03-01' = {
     managedEnvironmentId: containerAppsEnvironment.id
     configuration: {
       activeRevisionsMode: 'single'
-      ingress: ingressEnabled ? {
-        external: external
-        targetPort: targetPort
-        transport: 'auto'
-      } : null
-      dapr: daprEnabled ? {
-        enabled: true
-        appId: daprAppId
-        appProtocol: daprAppProtocol
-        appPort: ingressEnabled ? targetPort : 0
-      } : { enabled: false }
+      ingress: ingressEnabled
+        ? {
+            external: external
+            targetPort: targetPort
+            transport: 'auto'
+            customDomains: !empty(customHostName) && !empty(customCertificateName)
+              ? [
+                  {
+                    name: customHostName
+                    certificateId: resourceId(
+                      'Microsoft.App/managedEnvironments/managedCertificates',
+                      containerAppsEnvironmentName,
+                      customCertificateName
+                    )
+                    bindingType: 'SniEnabled'
+                  }
+                ]
+              : []
+          }
+        : null
+      dapr: daprEnabled
+        ? {
+            enabled: true
+            appId: daprAppId
+            appProtocol: daprAppProtocol
+            appPort: ingressEnabled ? targetPort : 0
+          }
+        : { enabled: false }
       secrets: secrets
       registries: [
         {
