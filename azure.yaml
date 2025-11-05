@@ -5,6 +5,14 @@ metadata:
   template: containerapps-builtinauth-bicep0.1.0
 requiredVersions:
     azd: ">= 1.12.0"
+hooks:
+  postprovision:
+    posix:
+      shell: sh
+      run: ./infra/hooks/postprovision.sh
+    windows:
+      shell: pwsh
+      run: ./infra/hooks/postprovision.sh
 services:
   aca:
     project: .

@@ -157,6 +157,3 @@ output AZURE_STORAGE_ACCOUNT_ID string = storage.outputs.id
 // Outputs for SharePoint FilePicker configuration
 output ENTRA_CLIENT_ID string = registration.outputs.clientAppId
 output ENTRA_TENANT_ID string = tenant().tenantId
-
-// Command to update container app with Client ID (run after deployment)
-output UPDATE_ENTRA_CLIENT_ID_COMMAND string = 'az containerapp update --name ${aca.outputs.name} --resource-group ${resourceGroup.name} --set-env-vars "ENTRA_CLIENT_ID=${registration.outputs.clientAppId}"'

@@ -25,6 +25,9 @@
     },
     "customCertificateName": {
       "value": "${CUSTOM_CERTIFICATE_NAME}"
+    },
+    "sharePointBaseUrl": {
+      "value": "${VITE_SHAREPOINT_BASE_URL}"
     }
   }
 }
