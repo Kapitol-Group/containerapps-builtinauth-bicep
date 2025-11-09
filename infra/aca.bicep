@@ -21,6 +21,10 @@ param entraClientId string = ''
 param entraTenantId string = ''
 param sharePointBaseUrl string = ''
 
+// Data Fabric configuration parameters
+param dataFabricApiUrl string = ''
+param dataFabricApiKey string = ''
+
 @description('Custom domain hostname (optional)')
 param customHostName string = ''
 
@@ -74,6 +78,10 @@ var baseEnvVars = [
     name: 'SHAREPOINT_BASE_URL'
     value: sharePointBaseUrl
   }
+  {
+    name: 'DATA_FABRIC_API_URL'
+    value: dataFabricApiUrl
+  }
 ]
 
 var uipathApiKeyEnvVar = !empty(uipathApiKey)
@@ -85,7 +93,16 @@ var uipathApiKeyEnvVar = !empty(uipathApiKey)
     ]
   : []
 
-var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar)
+var dataFabricApiKeyEnvVar = !empty(dataFabricApiKey)
+  ? [
+      {
+        name: 'DATA_FABRIC_API_KEY'
+        secretRef: 'data-fabric-api-key'
+      }
+    ]
+  : []
+
+var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar, dataFabricApiKeyEnvVar)
 
 // Build secrets array conditionally
 var baseSecrets = [
@@ -104,7 +121,16 @@ var uipathApiKeySecret = !empty(uipathApiKey)
     ]
   : []
 
-var allSecrets = concat(baseSecrets, uipathApiKeySecret)
+var dataFabricApiKeySecret = !empty(dataFabricApiKey)
+  ? [
+      {
+        name: 'data-fabric-api-key'
+        value: dataFabricApiKey
+      }
+    ]
+  : []
+
+var allSecrets = concat(baseSecrets, uipathApiKeySecret, dataFabricApiKeySecret)
 
 module app 'core/host/container-app-upsert.bicep' = {
   name: '${serviceName}-container-app-module'

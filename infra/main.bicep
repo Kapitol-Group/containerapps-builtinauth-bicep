@@ -29,6 +29,13 @@ param serviceManagementReference string = ''
 @description('SharePoint base URL for the frontend')
 param sharePointBaseUrl string = ''
 
+@description('Data Fabric API URL')
+param dataFabricApiUrl string = ''
+
+@secure()
+@description('Data Fabric API Key')
+param dataFabricApiKey string = ''
+
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
 
@@ -95,6 +102,9 @@ module aca 'aca.bicep' = {
     sharePointBaseUrl: sharePointBaseUrl
     customHostName: customHostName
     customCertificateName: customCertificateName
+    // Data Fabric configuration
+    dataFabricApiUrl: dataFabricApiUrl
+    dataFabricApiKey: dataFabricApiKey
   }
 }
 

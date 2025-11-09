@@ -28,6 +28,12 @@
     },
     "sharePointBaseUrl": {
       "value": "${VITE_SHAREPOINT_BASE_URL}"
+    },
+    "dataFabricApiUrl": {
+      "value": "${DATA_FABRIC_API_URL}"
+    },
+    "dataFabricApiKey": {
+      "value": "${DATA_FABRIC_API_KEY}"
     }
   }
 }
