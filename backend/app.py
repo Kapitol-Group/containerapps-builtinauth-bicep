@@ -39,8 +39,13 @@ blob_service = BlobStorageService(
 )
 
 uipath_client = UiPathClient(
-    base_url=os.getenv('UIPATH_API_URL'),
-    api_key=os.getenv('UIPATH_API_KEY')
+    tenant_name=os.getenv('UIPATH_TENANT_NAME'),
+    app_id=os.getenv('UIPATH_APP_ID'),
+    api_key=os.getenv('UIPATH_API_KEY'),
+    folder_id=os.getenv('UIPATH_FOLDER_ID'),
+    queue_name=os.getenv('UIPATH_QUEUE_NAME'),
+    data_fabric_url=os.getenv('DATA_FABRIC_API_URL'),
+    data_fabric_key=os.getenv('DATA_FABRIC_API_KEY')
 )
 
 # Log startup info
@@ -603,28 +608,41 @@ def queue_extraction():
                 file_paths=file_paths,
                 discipline=category,  # Pass as discipline for UiPath compatibility
                 title_block_coords=title_block_coords,
-                submitted_by=user_info.get('name', 'Unknown'),
+                submitted_by=user_info.get('email', 'Unknown'),
                 batch_id=batch['batch_id']  # Pass batch_id to UiPath
             )
 
-            # Update batch with job_id
-            batch['job_id'] = job.get('job_id')
+            # Update batch with reference and submission details
+            batch['reference'] = job.get('reference')
+            batch['submission_id'] = job.get('submission_id')
+            batch['project_id'] = job.get('project_id')
 
-            # Note: In real implementation, we'd update the batch metadata blob with job_id
+            # Note: In real implementation, we'd update the batch metadata blob with submission details
             # For now, just return both in response
 
             logger.info(
-                f"Successfully created batch {batch['batch_id']} and queued job {job.get('job_id')}")
+                f"Successfully created batch {batch['batch_id']} with submission reference {job.get('reference')}")
 
             return jsonify({
                 'success': True,
                 'data': {
                     'batch_id': batch['batch_id'],
-                    'job_id': job.get('job_id'),
+                    'reference': job.get('reference'),
+                    'submission_id': job.get('submission_id'),
+                    'project_id': job.get('project_id'),
                     'status': job.get('status'),
                     'batch': batch
                 }
             }), 202
+
+        except ValueError as user_error:
+            # User not found in TitleBlockValidationUsers - return 400
+            logger.warning(f"User validation failed: {str(user_error)}")
+            blob_service.delete_batch(tender_id, batch['batch_id'])
+            return jsonify({
+                'success': False,
+                'error': str(user_error)
+            }), 400
 
         except Exception as uipath_error:
             # Rollback: delete batch if UiPath submission fails

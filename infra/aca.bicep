@@ -10,11 +10,12 @@ param exists bool
 
 // Environment variables for the backend
 param storageAccountName string = ''
-param uipathApiUrl string = ''
-param uipathApiKey string = ''
 param uipathTenantName string = ''
+param uipathAppId string = ''
+param uipathApiKey string = ''
 param uipathFolderId string = ''
-param uipathMockMode string = 'true'
+param uipathQueueName string = ''
+param uipathMockMode string = 'false'
 
 // Frontend configuration parameters
 param entraClientId string = ''
@@ -51,16 +52,20 @@ var baseEnvVars = [
     value: 'tender-documents'
   }
   {
-    name: 'UIPATH_API_URL'
-    value: uipathApiUrl
-  }
-  {
     name: 'UIPATH_TENANT_NAME'
     value: uipathTenantName
   }
   {
+    name: 'UIPATH_APP_ID'
+    value: uipathAppId
+  }
+  {
     name: 'UIPATH_FOLDER_ID'
     value: uipathFolderId
+  }
+  {
+    name: 'UIPATH_QUEUE_NAME'
+    value: uipathQueueName
   }
   {
     name: 'UIPATH_MOCK_MODE'

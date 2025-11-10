@@ -36,6 +36,22 @@ param dataFabricApiUrl string = ''
 @description('Data Fabric API Key')
 param dataFabricApiKey string = ''
 
+@description('UiPath Tenant Name')
+param uipathTenantName string = ''
+
+@description('UiPath App ID (OAuth Client ID)')
+param uipathAppId string = ''
+
+@secure()
+@description('UiPath API Key (OAuth Client Secret)')
+param uipathApiKey string = ''
+
+@description('UiPath Folder ID (Organization Unit ID)')
+param uipathFolderId string = ''
+
+@description('UiPath Queue Name')
+param uipathQueueName string = ''
+
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
 
@@ -96,6 +112,11 @@ module aca 'aca.bicep' = {
     exists: acaExists
     storageAccountName: storage.outputs.name
     uipathMockMode: 'true'
+    uipathTenantName: uipathTenantName
+    uipathAppId: uipathAppId
+    uipathApiKey: uipathApiKey
+    uipathFolderId: uipathFolderId
+    uipathQueueName: uipathQueueName
     // Frontend configuration - passed after app registration is created
     entraClientId: '' // Will be updated via appupdate
     entraTenantId: tenant().tenantId

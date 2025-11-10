@@ -5,3 +5,12 @@ azure-storage-blob==12.24.0
 azure-identity==1.19.0
 requests==2.32.3
 python-dotenv==1.0.1
+cuid2==2.0.1
+
+# Entity Store client dependencies
+httpx>=0.23.0,<0.29.0
+attrs>=22.2.0
+python-dateutil>=2.8.0
+
+# Local package - Entity Store transformation client
+-e ./entity-store-transformation-client

@@ -22,16 +22,31 @@ This document describes all environment variables used by the Tender Automation 
 
 | Variable | Description | Required | Default | Example |
 |----------|-------------|----------|---------|---------|
-| `UIPATH_API_URL` | UiPath Orchestrator API endpoint | No* | - | `https://cloud.uipath.com/{org}/{tenant}` |
-| `UIPATH_API_KEY` | UiPath API access key | No* | - | `********************************` |
-| `UIPATH_TENANT_NAME` | UiPath tenant/organization name | No* | - | `MyOrganization` |
-| `UIPATH_FOLDER_ID` | UiPath folder ID for processes | No* | - | `12345` |
+| `UIPATH_TENANT_NAME` | UiPath Cloud tenant identifier | No* | - | `kapitolgroup` |
+| `UIPATH_APP_ID` | OAuth client ID for UiPath Cloud | No* | - | `1234abcd-...` |
+| `UIPATH_API_KEY` | OAuth client secret for UiPath Cloud | No* | - | `********************************` |
+| `UIPATH_FOLDER_ID` | UiPath organization unit ID (UUID) | No* | - | `a1b2c3d4-...` |
+| `UIPATH_QUEUE_NAME` | Target queue name for extraction jobs | No* | - | `TenderExtractionQueue` |
 | `UIPATH_MOCK_MODE` | Enable mock mode (no real API calls) | No | `true` | `true` or `false` |
 
 **Notes:**
 - \* Required only if `UIPATH_MOCK_MODE=false`
 - When `UIPATH_MOCK_MODE=true` (default), the backend returns mock extraction results
 - UiPath API key is stored as a **secret** in Azure Container Apps
+- **BREAKING CHANGE**: `UIPATH_API_URL` removed - now uses `cloud.uipath.com/{tenant_name}/orchestrator_`
+- Credentials use OAuth 2.0 client credentials flow (not simple API key)
+
+### Data Fabric / Entity Store Configuration
+
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `DATA_FABRIC_API_URL` | Entity Store (Data Fabric) API base URL | Yes** | - | `https://datafabric.example.com` |
+| `DATA_FABRIC_API_KEY` | Entity Store API authentication key | Yes** | - | `********************************` |
+
+**Notes:**
+- \** Required for Entity Store integration (tender project tracking)
+- When missing, Entity Store features disabled but mock mode still works
+- API key stored as **secret** in Azure Container Apps
 
 ### CORS Configuration
 
@@ -69,6 +84,10 @@ export AZURE_STORAGE_CONTAINER_NAME=tender-documents
 # UiPath - use mock mode
 export UIPATH_MOCK_MODE=true
 
+# Data Fabric - optional for local testing
+# export DATA_FABRIC_API_URL=https://datafabric.example.com
+# export DATA_FABRIC_API_KEY=your-key
+
 # CORS - allow all for dev
 export FRONTEND_URL=*
 ```
@@ -99,21 +118,28 @@ Environment variables are automatically configured via Bicep templates:
 - ✅ `AZURE_STORAGE_ACCOUNT_NAME` - Auto-populated from storage module
 - ✅ `AZURE_STORAGE_CONTAINER_NAME` - Set to `tender-documents`
 - ✅ `UIPATH_MOCK_MODE` - Set to `true` by default
-- ⚠️ `UIPATH_API_URL`, `UIPATH_API_KEY`, etc. - Empty by default
-
-**Frontend Container App (`infra/frontend.bicep`):**
-- ✅ `VITE_BACKEND_API_URL` - Auto-populated from backend URI
+- ⚠️ `UIPATH_TENANT_NAME`, `UIPATH_APP_ID`, `UIPATH_API_KEY`, `UIPATH_FOLDER_ID`, `UIPATH_QUEUE_NAME` - Must be configured via `azd env set`
+- ⚠️ `DATA_FABRIC_API_URL`, `DATA_FABRIC_API_KEY` - Must be configured via `azd env set`
 
 **To configure UiPath in production:**
-1. Navigate to Azure Portal → Container Apps → backend app
-2. Go to "Environment variables"
-3. Add/update:
-   - `UIPATH_API_URL` = your UiPath orchestrator URL
-   - `UIPATH_API_KEY` = your API key (as secret)
-   - `UIPATH_TENANT_NAME` = your tenant
-   - `UIPATH_FOLDER_ID` = your folder ID
-   - `UIPATH_MOCK_MODE` = `false`
-4. Click "Save" - container app will restart
+```bash
+# Set environment variables before deployment
+azd env set UIPATH_TENANT_NAME "kapitolgroup"
+azd env set UIPATH_APP_ID "your-oauth-client-id"
+azd env set UIPATH_API_KEY "your-oauth-client-secret"
+azd env set UIPATH_FOLDER_ID "your-folder-uuid"
+azd env set UIPATH_QUEUE_NAME "TenderExtractionQueue"
+
+# Deploy with new configuration
+azd deploy
+```
+
+**To configure Entity Store:**
+```bash
+azd env set DATA_FABRIC_API_URL "https://your-datafabric-url"
+azd env set DATA_FABRIC_API_KEY "your-api-key"
+azd deploy
+```
 
 ## Security Best Practices
 
@@ -139,7 +165,13 @@ Environment variables are automatically configured via Bicep templates:
 ### Issue: "UiPath integration will not work"
 **Solution:**
 - Expected if `UIPATH_MOCK_MODE=true` (default)
-- To use real UiPath, configure all UiPath variables and set mock mode to `false`
+- To use real UiPath, configure all UiPath variables via `azd env set` and redeploy
+
+### Issue: "Data Fabric credentials not configured"
+**Solution:**
+- Expected if Entity Store integration not set up
+- Configure `DATA_FABRIC_API_URL` and `DATA_FABRIC_API_KEY` via `azd env set` and redeploy
+- System will still work in mock mode without Entity Store
 
 ### Issue: Frontend can't connect to backend
 **Solution:**
@@ -189,9 +221,13 @@ fetch('/api/health').then(r => r.json()).then(console.log)
 
 ---
 
-**Last Updated:** October 2025  
+**Last Updated:** November 2025  
 **Related Files:**
 - `infra/aca.bicep` - Backend environment configuration
-- `infra/frontend.bicep` - Frontend environment configuration
+- `infra/main.bicep` - Main infrastructure with UiPath parameters
 - `backend/app.py` - Environment variable usage
-- `frontend/src/services/api.ts` - API URL configuration
+- `backend/services/uipath_client.py` - UiPath and Entity Store client
+
+**Related Documentation:**
+- `UIPATH_ENTITY_STORE_INTEGRATION_PLAN.md` - Implementation plan
+- `UIPATH_ENTITY_STORE_IMPLEMENTATION_SUMMARY.md` - Implementation summary

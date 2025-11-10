@@ -34,6 +34,21 @@
     },
     "dataFabricApiKey": {
       "value": "${DATA_FABRIC_API_KEY}"
+    },
+    "uipathTenantName": {
+      "value": "${UIPATH_TENANT_NAME}"
+    },
+    "uipathAppId": {
+      "value": "${UIPATH_APP_ID}"
+    },
+    "uipathApiKey": {
+      "value": "${UIPATH_API_KEY}"
+    },
+    "uipathFolderId": {
+      "value": "${UIPATH_FOLDER_ID}"
+    },
+    "uipathQueueName": {
+      "value": "${UIPATH_QUEUE_NAME}"
     }
   }
 }

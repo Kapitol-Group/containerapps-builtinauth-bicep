@@ -28,10 +28,15 @@ FROM python:3.12
 
 WORKDIR /code
 
+# Copy entity store client first
+COPY backend/entity-store-transformation-client ./entity-store-transformation-client
+
+# Copy requirements and install dependencies
 COPY backend/requirements.txt .
 
 RUN pip3 install -r requirements.txt
 
+# Copy rest of backend code
 COPY backend/ .
 
 # Copy built frontend from previous stage
