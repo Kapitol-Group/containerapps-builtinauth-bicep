@@ -19,6 +19,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress verbose Azure SDK logging
+logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
+    logging.WARNING
+)
+logging.getLogger("azure.cosmos").setLevel(logging.WARNING)
+logging.getLogger("azure.identity").setLevel(logging.WARNING)
+logging.getLogger("azure.core").setLevel(logging.WARNING)
+
+
 # Create a flask app
 # Serve React build from frontend_build directory, fallback to templates/static for legacy routes
 app = Flask(
