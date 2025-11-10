@@ -524,14 +524,6 @@ class UiPathClient:
 
             print(
                 f"Submitting {len(queue_items)} queue items to UiPath (queue: {self.queue_name})")
-            print(f"UiPath URL: {url}")
-            print(f"UiPath Folder ID: {self.folder_id}")
-
-            # Log full payload for debugging
-            import json
-            print("=== UiPath Queue Payload ===")
-            print(json.dumps(payload, indent=2))
-            print("=== End Payload ===")
 
             # Submit request
             response = requests.post(
@@ -540,12 +532,6 @@ class UiPathClient:
                 headers=headers,
                 timeout=30
             )
-
-            print(f"Response status: {response.status_code}")
-            print(f"Response headers: {dict(response.headers)}")
-            print(
-                f"Response content length: {len(response.content) if response.content else 0}")
-            print(f"Response text: '{response.text}'")
 
             # Check status code first
             if response.status_code != 200:
