@@ -42,9 +42,15 @@ Single Dockerfile produces combined container:
 - `Dockerfile` EXPOSE directive
 - `gunicorn.conf.py` bind setting
 - `infra/aca.bicep` targetPort
-- `backend/app.py` Flask default
+- `backend/app.py` Flask fallback (production uses gunicorn)
 
 **To change**: Update all 4 locations simultaneously or app won't start.
+
+### Testing
+**No automated tests currently**. The project does not have test files. Validation is done through:
+- Manual testing after deployment
+- Azure Container App health checks
+- Log monitoring via `azd logs` or Azure Portal
 
 ## Development Workflows
 
@@ -139,6 +145,7 @@ Backend uses `DefaultAzureCredential()` - automatically works in Container Apps 
 - `backend/services/uipath_client.py`: UiPath REST API client with mock mode fallback
 - `frontend/src/authConfig.ts`: MSAL configuration, `getDelegatedToken()` for SharePoint auth with silent → popup fallback
 - `Dockerfile`: Multi-stage build accepting `ARG VITE_*` for frontend, copies to `frontend_build/`
+- `backend/app.py` (line 796-804): Custom 404 handler routes non-API requests to React SPA for client-side routing
 
 ## Debugging Patterns
 
@@ -157,8 +164,8 @@ Backend uses `DefaultAzureCredential()` - automatically works in Container Apps 
 1. Check logs: `azd logs` or Azure Portal → Log Stream
 2. Verify port 50505 exposed and bound in all locations
 3. Check Docker build args passed correctly in `azure.yaml`
-4. Inspect `gunicorn.conf.py` worker/thread settings (defaults: 4 workers, 8 threads)
-5. Gunicorn auto-scales: `(CPU_count * 2) + 1` workers, uses `max_requests=1000` for graceful restarts
+4. Inspect `gunicorn.conf.py` worker/thread settings
+5. Gunicorn auto-scales: `(CPU_count * 2) + 1` workers, `threads = workers`, uses `max_requests=1000` for graceful restarts
 
 ### Frontend Shows Old Configuration
 **Symptom**: Environment variables not updating after `azd env set`
