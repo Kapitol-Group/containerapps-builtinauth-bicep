@@ -16,12 +16,13 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 interface ExtractionModalProps {
   tenderId: string;
+  tenderName?: string;
   files: TenderFile[];
   onClose: () => void;
   onSubmit: () => void;
 }
 
-const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onClose, onSubmit }) => {
+const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName, files, onClose, onSubmit }) => {
   const [destination, setDestination] = useState('');
   const [destinations, setDestinations] = useState<Array<{ name: string; path: string }>>([]);
   const [isLoadingDestinations, setIsLoadingDestinations] = useState(false);
@@ -413,6 +414,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, files, onCl
       
       await uipathApi.queueExtraction(
         tenderId,
+        tenderName || tenderId,
         files.map(f => f.path),
         destination,
         coords,

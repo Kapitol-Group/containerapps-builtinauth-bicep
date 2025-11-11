@@ -111,6 +111,7 @@ export const filesApi = {
 export const uipathApi = {
     queueExtraction: async (
         tenderId: string,
+        tenderName: string,
         filePaths: string[],
         discipline: string,
         titleBlockCoords: TitleBlockCoords,
@@ -118,6 +119,7 @@ export const uipathApi = {
     ): Promise<{ batch_id: string; job_id: string; status: string; batch: Batch }> => {
         const response = await api.post<ApiResponse<{ batch_id: string; job_id: string; status: string; batch: Batch }>>('/uipath/extract', {
             tender_id: tenderId,
+            tender_name: tenderName,
             file_paths: filePaths,
             discipline,
             title_block_coords: titleBlockCoords,

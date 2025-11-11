@@ -254,6 +254,7 @@ const TenderManagementPage: React.FC = () => {
       {showExtractionModal && tenderId && (
         <ExtractionModal
           tenderId={tenderId}
+          tenderName={tender?.name}
           files={selectedFiles}
           onClose={() => setShowExtractionModal(false)}
           onSubmit={() => {

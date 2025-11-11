@@ -565,6 +565,7 @@ def queue_extraction():
     try:
         data = request.json
         tender_id = data.get('tender_id')
+        tender_name = data.get('tender_name')
         file_paths = data.get('file_paths', [])
 
         # Support both 'discipline' (legacy) and 'destination' (new)
@@ -613,7 +614,7 @@ def queue_extraction():
         # Submit job to UiPath with batch_id reference
         try:
             job = uipath_client.submit_extraction_job(
-                tender_id=tender_id,
+                tender_id=tender_name,
                 file_paths=file_paths,
                 discipline=category,  # Pass as discipline for UiPath compatibility
                 title_block_coords=title_block_coords,
