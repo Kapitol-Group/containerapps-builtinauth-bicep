@@ -59,6 +59,16 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
       return;
     }
 
+    if (!sharepointsiteid || !sharepointlibraryid || !sharepointfolderpath) {
+      setError('SharePoint Path is required');
+      return;
+    }
+
+    if (!outputSiteId || !outputLibraryId || !outputFolderPath) {
+      setError('Output Location is required');
+      return;
+    }
+
     try {
       setLoading(true);
       setError('');
@@ -112,6 +122,12 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
         if (identifiers.sharepointfolderpath) {
           const sourceLabel = identifiers.pathSource === 'graphApi' ? ' (via Graph API)' : '';
           setSharepointPath(identifiers.sharepointfolderpath + sourceLabel);
+          
+          // Auto-populate Tender Name with the folder name
+          const folderName = identifiers.sharepointfolderpath.split('/').filter(Boolean).pop() || '';
+          if (folderName && !name) {
+            setName(folderName);
+          }
         } else {
           setSharepointPath('Selected (path unavailable - check console)');
           console.warn('Folder path is unavailable despite Graph API attempt');
@@ -184,28 +200,16 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
         ) : (
           <form onSubmit={handleSubmit}>
           <div className="form-group">
-            <label htmlFor="name">Tender Name *</label>
-            <input
-              type="text"
-              id="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Enter tender name"
-              disabled={loading}
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="sharepointPath">SharePoint Path</label>
+            <label htmlFor="sharepointPath">SharePoint Path *</label>
             <div className="input-with-button">
               <input
                 type="text"
                 id="sharepointPath"
                 value={sharepointPath}
-                onChange={(e) => setSharepointPath(e.target.value)}
                 placeholder="Select from SharePoint..."
                 disabled={loading}
+                readOnly
+                required
               />
               <SharePointFilePicker
                 baseUrl={sharePointBaseUrl}
@@ -217,15 +221,16 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
           </div>
 
           <div className="form-group">
-            <label htmlFor="outputLocation">Output Location</label>
+            <label htmlFor="outputLocation">Output Location *</label>
             <div className="input-with-button">
               <input
                 type="text"
                 id="outputLocation"
                 value={outputLocation}
-                onChange={(e) => setOutputLocation(e.target.value)}
-                placeholder="Select output location (optional)"
+                placeholder="Select output location..."
                 disabled={loading}
+                readOnly
+                required
               />
               <SharePointFilePicker
                 baseUrl={sharePointBaseUrl}
@@ -234,6 +239,19 @@ const CreateTenderModal: React.FC<CreateTenderModalProps> = ({ onClose, onTender
                 buttonText="Browse"
               />
             </div>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="name">Tender Name *</label>
+            <input
+              type="text"
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Enter tender name"
+              disabled={loading}
+              required
+            />
           </div>
 
           {error && <div className="error-message">{error}</div>}
