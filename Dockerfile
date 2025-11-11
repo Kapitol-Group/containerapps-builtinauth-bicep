@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y curl gnupg && \
     curl -o /etc/apt/sources.list.d/mssql-release.list https://packages.microsoft.com/config/debian/11/prod.list && \
     apt-get update && ACCEPT_EULA=Y apt-get install -y msodbcsql17
 
-RUN apt-get update && apt-get install -y cronie \
+RUN apt-get update && apt-get install -y cron \
 	&& pip3 install -r requirements.txt
 
 COPY . .
