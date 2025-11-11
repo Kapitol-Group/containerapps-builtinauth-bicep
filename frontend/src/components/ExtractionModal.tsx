@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import { TenderFile, TitleBlockCoords } from '../types';
+import { TenderFile, TitleBlockCoords, Tender } from '../types';
 import { uipathApi, filesApi, tendersApi, sharepointApi } from '../services/api';
 import { getGraphApiToken } from '../authConfig';
 import Dialog from './Dialog';
@@ -33,6 +33,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
   const [requiresTitleBlock, setRequiresTitleBlock] = useState(false);
+  const [tender, setTender] = useState<Tender | null>(null);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
@@ -50,9 +51,10 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
       setIsLoadingDestinations(true);
       try {
         // Get tender details to retrieve output location
-        const tender = await tendersApi.get(tenderId);
+        const tenderData = await tendersApi.get(tenderId);
+        setTender(tenderData); // Store tender data
         
-        if (!tender.output_library_id || !tender.output_folder_path) {
+        if (!tenderData.output_library_id || !tenderData.output_folder_path) {
           console.warn('Tender missing output location configuration');
           setDestinations([]);
           setIsLoadingDestinations(false);
@@ -72,8 +74,8 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
         // Fetch folders from SharePoint
         const folders = await sharepointApi.listFolders(
           accessToken,
-          tender.output_library_id,
-          tender.output_folder_path
+          tenderData.output_library_id,
+          tenderData.output_folder_path
         );
         
         setDestinations(folders.map(f => ({ name: f.name, path: f.path })));
@@ -418,7 +420,9 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
         files.map(f => f.path),
         destination,
         coords,
-        batchName
+        batchName,
+        tender?.sharepoint_folder_path,
+        tender?.output_folder_path
       );
       onSubmit();
     } catch (error) {

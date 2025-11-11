@@ -115,7 +115,9 @@ export const uipathApi = {
         filePaths: string[],
         discipline: string,
         titleBlockCoords: TitleBlockCoords,
-        batchName?: string
+        batchName?: string,
+        sharepointFolderPath?: string,
+        outputFolderPath?: string
     ): Promise<{ batch_id: string; job_id: string; status: string; batch: Batch }> => {
         const response = await api.post<ApiResponse<{ batch_id: string; job_id: string; status: string; batch: Batch }>>('/uipath/extract', {
             tender_id: tenderId,
@@ -124,6 +126,8 @@ export const uipathApi = {
             discipline,
             title_block_coords: titleBlockCoords,
             batch_name: batchName,
+            sharepoint_folder_path: sharepointFolderPath,
+            output_folder_path: outputFolderPath,
         });
 
         if (!response.data.success || !response.data.data) {

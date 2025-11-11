@@ -558,7 +558,9 @@ class UiPathClient:
                           reference: str,
                           document_count: int,
                           discipline: str,
-                          title_block_coords: Optional[Dict] = None) -> Dict:
+                          title_block_coords: Optional[Dict] = None,
+                          sharepoint_folder_path: Optional[str] = None,
+                          output_folder_path: Optional[str] = None) -> Dict:
         """
         Build a UiPath queue item object
 
@@ -570,6 +572,8 @@ class UiPathClient:
             document_count: Total files in this submission
             discipline: Drawing discipline (e.g., 'Architectural', 'Structural')
             title_block_coords: Optional title block coordinates {x, y, width, height} in pixels
+            sharepoint_folder_path: SharePoint folder path for input documents
+            output_folder_path: SharePoint folder path for output location
 
         Returns:
             Queue item dictionary for bulk add API
@@ -594,7 +598,9 @@ class UiPathClient:
                 "RequestDate": datetime.now().strftime("%Y-%m-%d"),
                 "IsAddendum": False,
                 "Discipline": discipline,
-                "TitleBlockCoords": coords_str  # String instead of object
+                "TitleBlockCoords": coords_str,  # String instead of object
+                "SharePointFolderPath": sharepoint_folder_path or "",
+                "OutputFolderPath": output_folder_path or ""
             }
         }
 
@@ -686,7 +692,9 @@ class UiPathClient:
                               discipline: str,
                               title_block_coords: Dict,
                               submitted_by: str = 'Unknown',
-                              batch_id: Optional[str] = None) -> Dict:
+                              batch_id: Optional[str] = None,
+                              sharepoint_folder_path: Optional[str] = None,
+                              output_folder_path: Optional[str] = None) -> Dict:
         """
         Submit a drawing metadata extraction job via Entity Store and UiPath queue
 
@@ -697,6 +705,8 @@ class UiPathClient:
             title_block_coords: Title block coordinates (for logging, not used in queue items)
             submitted_by: User email who submitted the job
             batch_id: Optional batch identifier for backward compatibility
+            sharepoint_folder_path: SharePoint folder path for input documents
+            output_folder_path: SharePoint folder path for output location
 
         Returns:
             Job information dictionary with submission details
@@ -755,7 +765,9 @@ class UiPathClient:
                     reference=reference,
                     document_count=document_count,
                     discipline=discipline,
-                    title_block_coords=title_block_coords
+                    title_block_coords=title_block_coords,
+                    sharepoint_folder_path=sharepoint_folder_path,
+                    output_folder_path=output_folder_path
                 )
                 queue_items.append(queue_item)
 

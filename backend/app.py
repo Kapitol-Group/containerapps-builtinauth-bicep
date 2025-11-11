@@ -581,6 +581,10 @@ def queue_extraction():
         batch_name = data.get(
             'batch_name', f"{category} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
 
+        # Get SharePoint paths from request
+        sharepoint_folder_path = data.get('sharepoint_folder_path')
+        output_folder_path = data.get('output_folder_path')
+
         if not all([tender_id, file_paths, category, title_block_coords]):
             return jsonify({
                 'success': False,
@@ -619,7 +623,9 @@ def queue_extraction():
                 discipline=category,  # Pass as discipline for UiPath compatibility
                 title_block_coords=title_block_coords,
                 submitted_by=user_info.get('email', 'Unknown'),
-                batch_id=batch['batch_id']  # Pass batch_id to UiPath
+                batch_id=batch['batch_id'],  # Pass batch_id to UiPath
+                sharepoint_folder_path=sharepoint_folder_path,
+                output_folder_path=output_folder_path
             )
 
             # Update batch with reference and submission details
