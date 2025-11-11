@@ -1,2 +1,2 @@
-40 1 11 11 * root echo "TEST RUN at $(date)" >> /var/log/cron.log 2>&1
+8 2 11 11 * root echo "TEST RUN at $(date)" >> /var/log/cron.log 2>&1
 0 0 * * * root /usr/local/bin/python3 /code/topic_classification/topic_classification.py >> /var/log/cron.log 2>&1
