@@ -3,9 +3,10 @@ UiPath REST API client for drawing metadata extraction with Entity Store integra
 """
 import requests
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 from cuid2 import Cuid
+import time
 
 # Entity Store client imports
 from entity_store_transformation_client import AuthenticatedClient
@@ -59,18 +60,17 @@ class UiPathClient:
         self.api_key = api_key
         self.folder_id = folder_id
         self.queue_name = queue_name
+        self.data_fabric_url = data_fabric_url
+        self.data_fabric_key = data_fabric_key
 
-        # Authenticate
-        access_token = self._authenticate_uipath(
-            "DataFabric.Data.Read DataFabric.Data.Write DataFabric.Schema.Read")
+        # Token expiration tracking
+        self.token_expiry = None
+        self.token_scopes = "DataFabric.Data.Read DataFabric.Data.Write DataFabric.Schema.Read"
 
         # Initialize Entity Store client
         self.entity_client = None
         if data_fabric_url and data_fabric_key:
-            self.entity_client = AuthenticatedClient(
-                base_url=data_fabric_url,
-                token=access_token
-            )
+            self._initialize_entity_client()
 
         # Check if running in mock mode
         self.mock_mode = not (
@@ -140,6 +140,100 @@ class UiPathClient:
         except requests.exceptions.RequestException as e:
             raise Exception(f"UiPath authentication failed: {str(e)}")
 
+    def _get_token_with_expiry(self, scopes: str) -> tuple[str, datetime]:
+        """
+        Authenticate with UiPath and return both token and expiry time
+
+        Returns:
+            Tuple of (access_token, expiry_datetime)
+
+        Raises:
+            Exception: If authentication fails
+        """
+        try:
+            token_url = "https://cloud.uipath.com/identity_/connect/token"
+
+            payload = {
+                'client_id': self.app_id,
+                'client_secret': self.api_key,
+                'grant_type': 'client_credentials',
+                'scope': scopes
+            }
+
+            print(
+                f"Authenticating with UiPath Cloud for Entity Store (client_id: {self.app_id[:8]}...)")
+
+            response = requests.post(
+                token_url,
+                data=payload,
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                timeout=30
+            )
+            response.raise_for_status()
+
+            token_data = response.json()
+            access_token = token_data.get('access_token')
+            # Default to 1 hour if not provided
+            expires_in = token_data.get('expires_in', 3600)
+
+            if not access_token:
+                raise Exception("No access token in response")
+
+            # Calculate expiry time with 5-minute buffer to refresh before actual expiry
+            expiry_time = datetime.now() + timedelta(seconds=expires_in - 300)
+
+            print(
+                f"Entity Store authentication successful (expires at {expiry_time.strftime('%Y-%m-%d %H:%M:%S')})")
+            return access_token, expiry_time
+
+        except requests.exceptions.HTTPError as e:
+            error_detail = ""
+            if e.response is not None:
+                try:
+                    error_detail = f" - Response: {e.response.text}"
+                except:
+                    error_detail = " - Unable to read response text"
+            raise Exception(
+                f"UiPath authentication failed: {str(e)}{error_detail}")
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"UiPath authentication failed: {str(e)}")
+
+    def _initialize_entity_client(self) -> None:
+        """
+        Initialize or refresh the Entity Store client with a new token
+        """
+        try:
+            access_token, expiry_time = self._get_token_with_expiry(
+                self.token_scopes)
+
+            self.entity_client = AuthenticatedClient(
+                base_url=self.data_fabric_url,
+                token=access_token
+            )
+            self.token_expiry = expiry_time
+
+        except Exception as e:
+            print(f"Failed to initialize Entity Store client: {str(e)}")
+            raise
+
+    def _ensure_valid_token(self) -> None:
+        """
+        Check if Entity Store token is still valid and refresh if needed
+        Should be called before any Entity Store operation
+        """
+        if not self.entity_client:
+            return
+
+        # Check if token is expired or close to expiry
+        if self.token_expiry is None or datetime.now() >= self.token_expiry:
+            print("Entity Store token expired or missing, refreshing...")
+            self._initialize_entity_client()
+        else:
+            # Calculate remaining time for logging
+            remaining = self.token_expiry - datetime.now()
+            print(
+                f"Entity Store token valid (expires in {int(remaining.total_seconds() / 60)} minutes)")
+
     def _get_or_create_tender_project(self, tender_id: str) -> TenderProject:
         """
         Lookup or create a TenderProject in Entity Store
@@ -153,6 +247,9 @@ class UiPathClient:
         Raises:
             Exception: If query or creation fails
         """
+        # Ensure token is valid before proceeding
+        self._ensure_valid_token()
+
         try:
             print(f"Looking up TenderProject with Name='{tender_id}'")
 
@@ -227,6 +324,9 @@ class UiPathClient:
             ValueError: If user not found (fail-fast requirement)
             Exception: If query fails
         """
+        # Ensure token is valid before proceeding
+        self._ensure_valid_token()
+
         try:
             print(
                 f"Looking up TitleBlockValidationUsers with UserEmail='{user_email}'")
@@ -295,6 +395,9 @@ class UiPathClient:
         Raises:
             Exception: If creation fails
         """
+        # Ensure token is valid before proceeding
+        self._ensure_valid_token()
+
         try:
             print(
                 f"Creating TenderSubmission: Reference={reference}, ProjectID={project.id}")
@@ -356,6 +459,9 @@ class UiPathClient:
         Raises:
             Exception: If creation fails
         """
+        # Ensure token is valid before proceeding
+        self._ensure_valid_token()
+
         try:
             # Extract filename from path
             filename = file_path.split('/')[-1]
@@ -415,6 +521,14 @@ class UiPathClient:
         if not file_ids:
             return
 
+        # Ensure token is valid before proceeding
+        try:
+            self._ensure_valid_token()
+        except Exception as e:
+            print(
+                f"Token refresh failed during rollback (non-fatal): {str(e)}")
+            return
+
         try:
             print(f"Rolling back: Deleting {len(file_ids)} TenderFile records")
 
@@ -470,6 +584,7 @@ class UiPathClient:
         queue_item = {
             "Name": self.queue_name,
             "Priority": "High",
+            "Reference": reference,
             "SpecificContent": {
                 "ProjectName": tender_id,
                 "ValidationUser": submitted_by,
