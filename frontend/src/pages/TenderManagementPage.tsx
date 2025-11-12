@@ -269,6 +269,9 @@ const TenderManagementPage: React.FC = () => {
             
             // Switch to batches tab
             setActiveTab('batches');
+
+            // Clear pdf preview
+            setSelectedFile(null);
             
             setAlertDialog({ 
               show: true, 
