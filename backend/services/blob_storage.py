@@ -16,6 +16,44 @@ from werkzeug.datastructures import FileStorage
 logger = logging.getLogger(__name__)
 
 
+def sanitize_metadata_value(value: str) -> str:
+    """
+    Sanitize metadata value to only contain ASCII characters.
+    Azure Blob Storage metadata values must be ASCII-only.
+
+    Args:
+        value: Original string value
+
+    Returns:
+        ASCII-safe string with non-ASCII characters replaced
+    """
+    if not value:
+        return value
+    # Encode to ASCII, replacing non-ASCII characters with '?'
+    # Then decode back to string
+    return value.encode('ascii', 'replace').decode('ascii')
+
+
+def sanitize_metadata_dict(metadata: Dict) -> Dict:
+    """
+    Sanitize all string values in a metadata dictionary to ASCII-only.
+    Azure Blob Storage metadata values must be ASCII-only.
+
+    Args:
+        metadata: Dictionary with metadata key-value pairs
+
+    Returns:
+        Dictionary with sanitized string values
+    """
+    sanitized = {}
+    for key, value in metadata.items():
+        if isinstance(value, str):
+            sanitized[key] = sanitize_metadata_value(value)
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
 class BlobStorageService:
     """Service for managing tender documents in Azure Blob Storage"""
 
@@ -134,12 +172,20 @@ class BlobStorageService:
         # Create a metadata blob to mark the tender folder
         metadata_blob_name = f"{tender_id}/.tender_metadata"
 
+        # Create metadata with sanitized values (Azure Blob Storage requires ASCII-only metadata)
         tender_metadata = {
-            'tender_name': tender_name,
-            'created_by': created_by,
+            'tender_name': sanitize_metadata_value(tender_name),
+            'created_by': sanitize_metadata_value(created_by),
             'created_at': datetime.utcnow().isoformat(),
-            **(metadata or {})
         }
+
+        # Add any additional metadata, sanitizing string values
+        if metadata:
+            for key, value in metadata.items():
+                if isinstance(value, str):
+                    tender_metadata[key] = sanitize_metadata_value(value)
+                else:
+                    tender_metadata[key] = value
 
         blob_client = self.container_client.get_blob_client(metadata_blob_name)
         blob_client.upload_blob(
@@ -310,12 +356,13 @@ class BlobStorageService:
         # Construct blob path: tender_id/category/filename
         blob_name = f"{tender_id}/{category}/{file.filename}"
 
+        # Create metadata with sanitized values (Azure Blob Storage requires ASCII-only metadata)
         file_metadata = {
-            'category': category,
-            'uploaded_by': uploaded_by,
+            'category': sanitize_metadata_value(category),
+            'uploaded_by': sanitize_metadata_value(uploaded_by),
             'uploaded_at': datetime.utcnow().isoformat(),
-            'original_filename': file.filename,
-            'source': source
+            'original_filename': sanitize_metadata_value(file.filename),
+            'source': sanitize_metadata_value(source)
         }
 
         blob_client = self.container_client.get_blob_client(blob_name)
@@ -378,8 +425,9 @@ class BlobStorageService:
         properties = blob_client.get_blob_properties()
         existing_metadata = properties.metadata or {}
 
-        # Update with new metadata
-        existing_metadata.update(metadata)
+        # Update with new metadata (sanitize string values)
+        sanitized_metadata = sanitize_metadata_dict(metadata)
+        existing_metadata.update(sanitized_metadata)
 
         blob_client.set_blob_metadata(existing_metadata)
 
@@ -426,17 +474,17 @@ class BlobStorageService:
         # Create batch metadata blob
         batch_blob_name = f"{tender_id}/.batch_{batch_id}"
 
+        # Create metadata with sanitized values (Azure Blob Storage requires ASCII-only metadata)
         batch_metadata = {
-            'batch_id': batch_id,
-            'batch_name': batch_name,
-            'discipline': discipline,
+            'batch_name': sanitize_metadata_value(batch_name),
+            'discipline': sanitize_metadata_value(discipline),
             'file_paths': json.dumps(file_paths),
             'title_block_coords': json.dumps(title_block_coords),
             'status': 'pending',
             'submitted_at': datetime.utcnow().isoformat(),
-            'submitted_by': submitted_by,
+            'submitted_by': sanitize_metadata_value(submitted_by),
             'file_count': str(len(file_paths)),
-            'job_id': job_id or ''
+            'job_id': sanitize_metadata_value(job_id) if job_id else ''
         }
 
         blob_client = self.container_client.get_blob_client(batch_blob_name)
@@ -577,9 +625,9 @@ class BlobStorageService:
             if not properties.metadata:
                 return None
 
-            # Update metadata
+            # Update metadata (sanitize the status value)
             metadata = dict(properties.metadata)
-            metadata['status'] = status
+            metadata['status'] = sanitize_metadata_value(status)
 
             blob_client.set_blob_metadata(metadata)
 
@@ -662,11 +710,11 @@ class BlobStorageService:
                 blob_client = self.container_client.get_blob_client(file_path)
                 properties = blob_client.get_blob_properties()
 
-                # Get existing metadata and update
+                # Get existing metadata and update (sanitize new values)
                 metadata = dict(
                     properties.metadata) if properties.metadata else {}
-                metadata['category'] = category
-                metadata['batch_id'] = batch_id
+                metadata['category'] = sanitize_metadata_value(category)
+                metadata['batch_id'] = sanitize_metadata_value(batch_id)
                 metadata['submitted_at'] = datetime.utcnow().isoformat()
 
                 blob_client.set_blob_metadata(metadata)
