@@ -414,6 +414,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
       // Generate batch name based on destination and timestamp
       const batchName = `${destination} Batch ${new Date().toLocaleString()}`;
       
+      // Submit extraction - backend returns immediately after creating batch
       await uipathApi.queueExtraction(
         tenderId,
         tenderName || tenderId,
@@ -424,7 +425,14 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
         tender?.sharepoint_folder_path,
         tender?.output_folder_path
       );
+      
+      // Close modal immediately - batch is queued and processing in background
       onSubmit();
+      
+      // Show success message
+      // Note: The parent component should show a toast/notification that the batch is processing
+      console.log(`Batch "${batchName}" submitted successfully. Processing ${files.length} files in background.`);
+      
     } catch (error) {
       console.error('Failed to queue extraction:', error);
       setErrorDialog({ show: true, message: 'Failed to queue extraction. Please try again.' });

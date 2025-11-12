@@ -275,8 +275,8 @@ const TenderManagementPage: React.FC = () => {
             
             setAlertDialog({ 
               show: true, 
-              title: 'Success', 
-              message: 'Batch submitted successfully! Files have been categorized and moved to Submitted Batches.' 
+              title: 'Batch Queued Successfully', 
+              message: 'Your extraction batch has been queued and is processing in the background. Check the Batches tab for status updates.' 
             });
           }}
         />

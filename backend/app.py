@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -193,6 +194,58 @@ def create_tender():
             'success': False,
             'error': str(e)
         }), 500
+
+# UiPath API
+
+
+def _process_uipath_submission_async(
+    tender_id: str,
+    tender_name: str,
+    batch_id: str,
+    file_paths: list,
+    category: str,
+    title_block_coords: dict,
+    user_email: str,
+    sharepoint_folder_path: str,
+    output_folder_path: str
+):
+    """
+    Background worker to submit extraction job to UiPath.
+    Runs in separate thread to avoid blocking the HTTP response.
+    """
+    try:
+        logger.info(
+            f"[Background] Starting UiPath submission for batch {batch_id}")
+
+        job = uipath_client.submit_extraction_job(
+            tender_id=tender_name,
+            file_paths=file_paths,
+            discipline=category,
+            title_block_coords=title_block_coords,
+            submitted_by=user_email,
+            batch_id=batch_id,
+            sharepoint_folder_path=sharepoint_folder_path,
+            output_folder_path=output_folder_path
+        )
+
+        logger.info(
+            f"[Background] Successfully submitted batch {batch_id} to UiPath with reference {job.get('reference')}"
+        )
+
+        # TODO: Optionally update batch metadata blob with submission details
+        # For now, we just log the success
+
+    except ValueError as user_error:
+        # User validation failed - log error (batch already created, can't rollback at this point)
+        logger.error(
+            f"[Background] User validation failed for batch {batch_id}: {str(user_error)}")
+        # TODO: Update batch status to 'failed' in blob storage
+
+    except Exception as e:
+        # UiPath submission failed - log error
+        logger.error(
+            f"[Background] UiPath submission failed for batch {batch_id}: {str(e)}", exc_info=True)
+        # TODO: Update batch status to 'failed' in blob storage
 
 
 @app.get('/api/tenders/<tender_id>')
@@ -615,57 +668,39 @@ def queue_extraction():
             batch_id=batch['batch_id']
         )
 
-        # Submit job to UiPath with batch_id reference
-        try:
-            job = uipath_client.submit_extraction_job(
-                tender_id=tender_name,
-                file_paths=file_paths,
-                discipline=category,  # Pass as discipline for UiPath compatibility
-                title_block_coords=title_block_coords,
-                submitted_by=user_info.get('email', 'Unknown'),
-                batch_id=batch['batch_id'],  # Pass batch_id to UiPath
-                sharepoint_folder_path=sharepoint_folder_path,
-                output_folder_path=output_folder_path
-            )
+        # Start UiPath submission in background thread to avoid timeout
+        # The batch is already created and files are categorized, so we can return immediately
+        submission_thread = threading.Thread(
+            target=_process_uipath_submission_async,
+            args=(
+                tender_id,
+                tender_name,
+                batch['batch_id'],
+                file_paths,
+                category,
+                title_block_coords,
+                user_info.get('email', 'Unknown'),
+                sharepoint_folder_path,
+                output_folder_path
+            ),
+            daemon=True  # Daemon thread will not block app shutdown
+        )
+        submission_thread.start()
 
-            # Update batch with reference and submission details
-            batch['reference'] = job.get('reference')
-            batch['submission_id'] = job.get('submission_id')
-            batch['project_id'] = job.get('project_id')
+        logger.info(
+            f"Successfully created batch {batch['batch_id']} and queued for UiPath submission (processing in background)")
 
-            # Note: In real implementation, we'd update the batch metadata blob with submission details
-            # For now, just return both in response
-
-            logger.info(
-                f"Successfully created batch {batch['batch_id']} with submission reference {job.get('reference')}")
-
-            return jsonify({
-                'success': True,
-                'data': {
-                    'batch_id': batch['batch_id'],
-                    'reference': job.get('reference'),
-                    'submission_id': job.get('submission_id'),
-                    'project_id': job.get('project_id'),
-                    'status': job.get('status'),
-                    'batch': batch
-                }
-            }), 202
-
-        except ValueError as user_error:
-            # User not found in TitleBlockValidationUsers - return 400
-            logger.warning(f"User validation failed: {str(user_error)}")
-            blob_service.delete_batch(tender_id, batch['batch_id'])
-            return jsonify({
-                'success': False,
-                'error': str(user_error)
-            }), 400
-
-        except Exception as uipath_error:
-            # Rollback: delete batch if UiPath submission fails
-            logger.error(
-                f"UiPath submission failed, rolling back batch: {str(uipath_error)}")
-            blob_service.delete_batch(tender_id, batch['batch_id'])
-            raise
+        # Return immediately with batch details
+        # The UiPath submission will complete in the background
+        return jsonify({
+            'success': True,
+            'data': {
+                'batch_id': batch['batch_id'],
+                'status': 'pending',  # Initial status
+                'message': f'Batch created successfully. Processing {len(file_paths)} files in background.',
+                'batch': batch
+            }
+        }), 202
 
     except Exception as e:
         logger.error(f"Failed to queue extraction: {str(e)}", exc_info=True)
