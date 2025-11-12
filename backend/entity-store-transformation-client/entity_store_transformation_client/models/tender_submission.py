@@ -30,6 +30,8 @@ class TenderSubmission:
         validated_by (TitleBlockValidationUsers):
         archive_name (str):
         is_addendum (bool):
+        sharepoint_path (None | str | Unset):
+        output_location (None | str | Unset):
         created_by (SystemUser | Unset):
         update_time (datetime.datetime | None | Unset):
         create_time (datetime.datetime | Unset):
@@ -43,6 +45,8 @@ class TenderSubmission:
     validated_by: TitleBlockValidationUsers
     archive_name: str
     is_addendum: bool
+    sharepoint_path: None | str | Unset = UNSET
+    output_location: None | str | Unset = UNSET
     created_by: SystemUser | Unset = UNSET
     update_time: datetime.datetime | None | Unset = UNSET
     create_time: datetime.datetime | Unset = UNSET
@@ -62,6 +66,18 @@ class TenderSubmission:
         archive_name = self.archive_name
 
         is_addendum = self.is_addendum
+
+        sharepoint_path: None | str | Unset
+        if isinstance(self.sharepoint_path, Unset):
+            sharepoint_path = UNSET
+        else:
+            sharepoint_path = self.sharepoint_path
+
+        output_location: None | str | Unset
+        if isinstance(self.output_location, Unset):
+            output_location = UNSET
+        else:
+            output_location = self.output_location
 
         created_by: dict[str, Any] | Unset = UNSET
         if not isinstance(self.created_by, Unset):
@@ -99,6 +115,10 @@ class TenderSubmission:
                 "IsAddendum": is_addendum,
             }
         )
+        if sharepoint_path is not UNSET:
+            field_dict["SharepointPath"] = sharepoint_path
+        if output_location is not UNSET:
+            field_dict["OutputLocation"] = output_location
         if created_by is not UNSET:
             field_dict["CreatedBy"] = created_by
         if update_time is not UNSET:
@@ -130,6 +150,24 @@ class TenderSubmission:
         archive_name = d.pop("ArchiveName")
 
         is_addendum = d.pop("IsAddendum")
+
+        def _parse_sharepoint_path(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        sharepoint_path = _parse_sharepoint_path(d.pop("SharepointPath", UNSET))
+
+        def _parse_output_location(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        output_location = _parse_output_location(d.pop("OutputLocation", UNSET))
 
         _created_by = d.pop("CreatedBy", UNSET)
         created_by: SystemUser | Unset
@@ -183,6 +221,8 @@ class TenderSubmission:
             validated_by=validated_by,
             archive_name=archive_name,
             is_addendum=is_addendum,
+            sharepoint_path=sharepoint_path,
+            output_location=output_location,
             created_by=created_by,
             update_time=update_time,
             create_time=create_time,

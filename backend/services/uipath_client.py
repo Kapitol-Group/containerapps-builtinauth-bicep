@@ -380,7 +380,9 @@ class UiPathClient:
     def _create_tender_submission(self,
                                   project: TenderProject,
                                   reference: str,
-                                  user: TitleBlockValidationUsers) -> TenderSubmission:
+                                  user: TitleBlockValidationUsers,
+                                  sharepoint_path: Optional[str] = None,
+                                  output_location: Optional[str] = None) -> TenderSubmission:
         """
         Create a TenderSubmission record in Entity Store
 
@@ -388,6 +390,8 @@ class UiPathClient:
             project: TenderProject to link to
             reference: CUID reference for tracking
             user: User who submitted and will validate
+            sharepoint_path: SharePoint folder path for input documents
+            output_location: SharePoint folder path for output location
 
         Returns:
             Created TenderSubmission with ID
@@ -408,7 +412,9 @@ class UiPathClient:
                 submitted_by=user,
                 validated_by=user,  # Same user for now
                 archive_name="n/a",
-                is_addendum=False
+                is_addendum=False,
+                sharepoint_path=sharepoint_path,
+                output_location=output_location
             )
 
             # Make direct HTTP request to avoid parsing issues with expansion_level=0
@@ -434,7 +440,9 @@ class UiPathClient:
                 submitted_by=user,
                 validated_by=user,
                 archive_name="n/a",
-                is_addendum=False
+                is_addendum=False,
+                sharepoint_path=sharepoint_path,
+                output_location=output_location
             )
 
             print(f"Created TenderSubmission: ID={created_submission.id}")
@@ -746,7 +754,7 @@ class UiPathClient:
 
             # Step 4: Create TenderSubmission
             submission = self._create_tender_submission(
-                project, reference, user)
+                project, reference, user, sharepoint_folder_path, output_folder_path)
 
             # Step 5: Create TenderFile records and build queue items
             queue_items = []
