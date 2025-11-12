@@ -4,11 +4,15 @@ import logging
 import os
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
+from io import BytesIO
 from typing import Optional
 
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
+from werkzeug.datastructures import FileStorage
+import requests
 
 from services.blob_storage import BlobStorageService
 from services.uipath_client import UiPathClient
@@ -58,6 +62,13 @@ uipath_client = UiPathClient(
     data_fabric_url=os.getenv('DATA_FABRIC_API_URL'),
     data_fabric_key=os.getenv('DATA_FABRIC_API_KEY')
 )
+
+# SharePoint import job tracking (in-memory)
+sharepoint_import_jobs = {}
+import_jobs_lock = threading.Lock()
+
+# Auto-cleanup completed jobs after 1 hour
+JOB_CLEANUP_SECONDS = 3600
 
 # Log startup info
 logger.info("=" * 60)
@@ -1001,8 +1012,6 @@ def list_sharepoint_folders():
                 'error': 'Missing required parameters: access_token, drive_id, folder_path'
             }), 400
 
-        import requests
-
         # Handle two possible path formats:
         # 1. Full Graph API format: "/drives/{drive-id}/root:/path"
         # 2. Simple path format: "/path"
@@ -1074,6 +1083,231 @@ def list_sharepoint_folders():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.post('/api/sharepoint/import-files')
+def import_sharepoint_files():
+    """Import files from SharePoint to blob storage (backend-driven)"""
+    try:
+        data = request.json
+        tender_id = data.get('tender_id')
+        access_token = data.get('access_token')
+        items = data.get('items', [])
+        category = data.get('category', 'sharepoint-import')
+
+        if not tender_id or not access_token or not items:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required parameters: tender_id, access_token, items'
+            }), 400
+
+        # Verify tender exists
+        tender = blob_service.get_tender(tender_id)
+        if not tender:
+            return jsonify({
+                'success': False,
+                'error': 'Tender not found'
+            }), 404
+
+        # Generate job ID
+        job_id = str(uuid.uuid4())
+
+        # Initialize job tracking
+        with import_jobs_lock:
+            sharepoint_import_jobs[job_id] = {
+                'job_id': job_id,
+                'tender_id': tender_id,
+                'status': 'running',
+                'progress': 0,
+                'total': len(items),
+                'current_file': '',
+                'success_count': 0,
+                'error_count': 0,
+                'errors': [],
+                'created_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.utcnow().isoformat()
+            }
+
+        # Start background import thread
+        import_thread = threading.Thread(
+            target=_process_sharepoint_import,
+            args=(job_id, tender_id, access_token, items, category)
+        )
+        import_thread.daemon = True
+        import_thread.start()
+
+        logger.info(
+            f"Started SharePoint import job {job_id} for tender {tender_id} with {len(items)} items")
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'job_id': job_id,
+                'status': 'running',
+                'total': len(items)
+            }
+        })
+
+    except Exception as e:
+        logger.error(
+            f"Failed to start SharePoint import: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.get('/api/sharepoint/import-jobs/<job_id>')
+def get_sharepoint_import_job_status(job_id: str):
+    """Get status of a SharePoint import job"""
+    try:
+        with import_jobs_lock:
+            job = sharepoint_import_jobs.get(job_id)
+
+        if not job:
+            return jsonify({
+                'success': False,
+                'error': 'Job not found'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'data': job
+        })
+
+    except Exception as e:
+        logger.error(
+            f"Failed to get import job status: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, items: list, category: str):
+    """Background thread function to process SharePoint file imports"""
+    try:
+        for i, item in enumerate(items):
+            # Update current file
+            file_name = item.get('name', 'unknown')
+            relative_path = item.get('relativePath', '')
+
+            with import_jobs_lock:
+                if job_id in sharepoint_import_jobs:
+                    sharepoint_import_jobs[job_id]['current_file'] = file_name
+                    sharepoint_import_jobs[job_id]['progress'] = i
+                    sharepoint_import_jobs[job_id]['updated_at'] = datetime.utcnow(
+                    ).isoformat()
+
+            try:
+                # Check if it's a folder (folders don't have downloadUrl)
+                download_url = item.get('downloadUrl')
+                if not download_url:
+                    logger.info(
+                        f"Skipping folder or item without download URL: {file_name}")
+                    continue
+
+                # Download file from SharePoint
+                logger.info(
+                    f"Downloading {file_name} from SharePoint (job {job_id})...")
+                response = requests.get(
+                    download_url,
+                    headers={'Authorization': f'Bearer {access_token}'},
+                    timeout=300  # 5 minute timeout for large files
+                )
+
+                if not response.ok:
+                    raise Exception(
+                        f"Failed to download: {response.status_code} {response.reason}")
+
+                # Determine category (preserve folder structure if relativePath provided)
+                upload_category = category
+                if relative_path:
+                    # Use the first folder in relative path as category
+                    upload_category = relative_path.strip('/').split('/')[0]
+
+                # Upload to blob storage
+                logger.info(
+                    f"Uploading {file_name} to blob storage...")
+
+                # Create a FileStorage-like object from the downloaded content
+                file_stream = BytesIO(response.content)
+                file_storage = FileStorage(
+                    stream=file_stream,
+                    filename=file_name,
+                    content_type=item.get(
+                        'mimeType', 'application/octet-stream')
+                )
+
+                file_metadata = blob_service.upload_file(
+                    tender_id=tender_id,
+                    file=file_storage,
+                    category=upload_category,
+                    uploaded_by='SharePoint Import',
+                    source='sharepoint'
+                )
+
+                # Increment success count
+                with import_jobs_lock:
+                    if job_id in sharepoint_import_jobs:
+                        sharepoint_import_jobs[job_id]['success_count'] += 1
+
+                logger.info(
+                    f"Successfully imported {file_name} (job {job_id})")
+
+            except Exception as item_error:
+                error_msg = f"{file_name}: {str(item_error)}"
+                logger.error(
+                    f"Failed to import {file_name} in job {job_id}: {str(item_error)}")
+
+                with import_jobs_lock:
+                    if job_id in sharepoint_import_jobs:
+                        sharepoint_import_jobs[job_id]['error_count'] += 1
+                        sharepoint_import_jobs[job_id]['errors'].append(
+                            error_msg)
+
+        # Mark job as complete
+        with import_jobs_lock:
+            if job_id in sharepoint_import_jobs:
+                job = sharepoint_import_jobs[job_id]
+                job['status'] = 'completed' if job['error_count'] == 0 else 'completed_with_errors'
+                job['progress'] = len(items)
+                job['current_file'] = ''
+                job['updated_at'] = datetime.utcnow().isoformat()
+                job['completed_at'] = datetime.utcnow().isoformat()
+
+        logger.info(
+            f"SharePoint import job {job_id} completed: {sharepoint_import_jobs[job_id]['success_count']} succeeded, {sharepoint_import_jobs[job_id]['error_count']} failed")
+
+        # Schedule cleanup
+        cleanup_thread = threading.Thread(
+            target=_cleanup_import_job,
+            args=(job_id,)
+        )
+        cleanup_thread.daemon = True
+        cleanup_thread.start()
+
+    except Exception as e:
+        logger.error(
+            f"Fatal error in SharePoint import job {job_id}: {str(e)}", exc_info=True)
+
+        with import_jobs_lock:
+            if job_id in sharepoint_import_jobs:
+                sharepoint_import_jobs[job_id]['status'] = 'failed'
+                sharepoint_import_jobs[job_id]['errors'].append(
+                    f"Fatal error: {str(e)}")
+                sharepoint_import_jobs[job_id]['updated_at'] = datetime.utcnow(
+                ).isoformat()
+
+
+def _cleanup_import_job(job_id: str):
+    """Remove completed job from memory after cleanup period"""
+    time.sleep(JOB_CLEANUP_SECONDS)
+    with import_jobs_lock:
+        if job_id in sharepoint_import_jobs:
+            del sharepoint_import_jobs[job_id]
+            logger.info(f"Cleaned up import job {job_id}")
+
 
 # Health check
 

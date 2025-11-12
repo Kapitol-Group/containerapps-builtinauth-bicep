@@ -191,6 +191,53 @@ export const sharepointApi = {
         }
         return response.data.data;
     },
+
+    importFiles: async (
+        tenderId: string,
+        accessToken: string,
+        items: Array<{
+            name: string;
+            downloadUrl: string;
+            driveId: string;
+            itemId: string;
+            relativePath?: string;
+            size?: number;
+            mimeType?: string;
+        }>,
+        category?: string
+    ): Promise<{ job_id: string; status: string; total: number }> => {
+        const response = await api.post<ApiResponse<{ job_id: string; status: string; total: number }>>('/sharepoint/import-files', {
+            tender_id: tenderId,
+            access_token: accessToken,
+            items,
+            category
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to start SharePoint import');
+        }
+        return response.data.data;
+    },
+
+    getImportJobStatus: async (jobId: string): Promise<{
+        job_id: string;
+        tender_id: string;
+        status: 'running' | 'completed' | 'completed_with_errors' | 'failed';
+        progress: number;
+        total: number;
+        current_file: string;
+        success_count: number;
+        error_count: number;
+        errors: string[];
+        created_at: string;
+        updated_at: string;
+        completed_at?: string;
+    }> => {
+        const response = await api.get<ApiResponse<any>>(`/sharepoint/import-jobs/${jobId}`);
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to get import job status');
+        }
+        return response.data.data;
+    },
 };
 
 // Health check

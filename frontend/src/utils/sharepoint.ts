@@ -472,3 +472,150 @@ export async function extractSharePointIdentifiersWithPath(
         return null;
     }
 }
+
+/**
+ * Recursively fetch all files from a SharePoint folder and its subfolders
+ * @param driveId The drive/library ID
+ * @param itemId The folder item ID
+ * @param accessToken Graph API access token
+ * @param basePath Base path for relative path calculation (optional)
+ * @param currentPath Current relative path (used internally for recursion)
+ * @returns Array of file metadata with relative paths
+ */
+export async function fetchFolderContentsRecursive(
+    driveId: string,
+    itemId: string,
+    accessToken: string,
+    basePath: string = '',
+    currentPath: string = ''
+): Promise<Array<{
+    name: string;
+    downloadUrl: string;
+    size: number;
+    driveId: string;
+    itemId: string;
+    relativePath: string;
+    mimeType?: string;
+}>> {
+    const files: Array<{
+        name: string;
+        downloadUrl: string;
+        size: number;
+        driveId: string;
+        itemId: string;
+        relativePath: string;
+        mimeType?: string;
+    }> = [];
+
+    try {
+        // Fetch children of current folder
+        const graphUrl = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children`;
+
+        console.log(`Fetching folder contents: ${graphUrl}`);
+
+        const response = await fetch(graphUrl, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Accept': 'application/json',
+            },
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Graph API error:', response.status, errorText);
+            throw new Error(`Graph API request failed: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const items = data.value || [];
+
+        console.log(`Found ${items.length} items in folder`);
+
+        // Process each item
+        for (const item of items) {
+            if (item.folder) {
+                // It's a folder - recurse into it
+                console.log(`Recursing into folder: ${item.name}`);
+                const subfolderPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+
+                const subfolderFiles = await fetchFolderContentsRecursive(
+                    driveId,
+                    item.id,
+                    accessToken,
+                    basePath,
+                    subfolderPath
+                );
+
+                files.push(...subfolderFiles);
+            } else if (item.file) {
+                // It's a file - add to list
+                console.log(`Found file: ${item.name} (size: ${item.size} bytes)`);
+
+                files.push({
+                    name: item.name,
+                    downloadUrl: item['@microsoft.graph.downloadUrl'] || '',
+                    size: item.size || 0,
+                    driveId: driveId,
+                    itemId: item.id,
+                    relativePath: currentPath,
+                    mimeType: item.file?.mimeType,
+                });
+            }
+        }
+
+        // Handle pagination if there are more items
+        let nextLink = data['@odata.nextLink'];
+        while (nextLink) {
+            console.log('Fetching next page of items...');
+
+            const nextResponse = await fetch(nextLink, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Accept': 'application/json',
+                },
+            });
+
+            if (!nextResponse.ok) {
+                console.error('Failed to fetch next page, stopping pagination');
+                break;
+            }
+
+            const nextData = await nextResponse.json();
+            const nextItems = nextData.value || [];
+
+            console.log(`Found ${nextItems.length} more items`);
+
+            // Process paginated items
+            for (const item of nextItems) {
+                if (item.folder) {
+                    const subfolderPath = currentPath ? `${currentPath}/${item.name}` : item.name;
+                    const subfolderFiles = await fetchFolderContentsRecursive(
+                        driveId,
+                        item.id,
+                        accessToken,
+                        basePath,
+                        subfolderPath
+                    );
+                    files.push(...subfolderFiles);
+                } else if (item.file) {
+                    files.push({
+                        name: item.name,
+                        downloadUrl: item['@microsoft.graph.downloadUrl'] || '',
+                        size: item.size || 0,
+                        driveId: driveId,
+                        itemId: item.id,
+                        relativePath: currentPath,
+                        mimeType: item.file?.mimeType,
+                    });
+                }
+            }
+
+            nextLink = nextData['@odata.nextLink'];
+        }
+
+        return files;
+    } catch (error) {
+        console.error(`Error fetching folder contents for itemId ${itemId}:`, error);
+        throw error;
+    }
+}
