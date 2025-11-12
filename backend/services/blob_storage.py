@@ -476,6 +476,7 @@ class BlobStorageService:
 
         # Create metadata with sanitized values (Azure Blob Storage requires ASCII-only metadata)
         batch_metadata = {
+            'batch_id': batch_id,
             'batch_name': sanitize_metadata_value(batch_name),
             'discipline': sanitize_metadata_value(discipline),
             'file_paths': json.dumps(file_paths),
@@ -484,7 +485,13 @@ class BlobStorageService:
             'submitted_at': datetime.utcnow().isoformat(),
             'submitted_by': sanitize_metadata_value(submitted_by),
             'file_count': str(len(file_paths)),
-            'job_id': sanitize_metadata_value(job_id) if job_id else ''
+            'job_id': sanitize_metadata_value(job_id) if job_id else '',
+            # New fields for enhanced tracking
+            'submission_attempts': json.dumps([]),
+            'last_error': '',
+            'uipath_reference': '',
+            'uipath_submission_id': '',
+            'uipath_project_id': ''
         }
 
         blob_client = self.container_client.get_blob_client(batch_blob_name)
@@ -588,7 +595,13 @@ class BlobStorageService:
                     'submitted_at': properties.metadata.get('submitted_at'),
                     'submitted_by': properties.metadata.get('submitted_by'),
                     'file_count': int(properties.metadata.get('file_count', 0)),
-                    'job_id': properties.metadata.get('job_id', '')
+                    'job_id': properties.metadata.get('job_id', ''),
+                    # Enhanced tracking fields
+                    'submission_attempts': json.loads(properties.metadata.get('submission_attempts', '[]')),
+                    'last_error': properties.metadata.get('last_error', ''),
+                    'uipath_reference': properties.metadata.get('uipath_reference', ''),
+                    'uipath_submission_id': properties.metadata.get('uipath_submission_id', ''),
+                    'uipath_project_id': properties.metadata.get('uipath_project_id', '')
                 }
         except Exception as e:
             logger.error(f"Error getting batch {batch_id}: {e}")
@@ -638,6 +651,58 @@ class BlobStorageService:
 
         except Exception as e:
             logger.error(f"Error updating batch {batch_id} status: {e}")
+            return None
+
+    def update_batch(self, tender_id: str, batch_id: str, updates: Dict) -> Optional[Dict]:
+        """
+        Update batch metadata with custom fields
+
+        Args:
+            tender_id: Tender identifier
+            batch_id: Batch identifier
+            updates: Dictionary of fields to update (can include any metadata fields)
+
+        Returns:
+            Updated batch information or None if not found
+        """
+        if not self.container_client:
+            return None
+
+        batch_blob_name = f"{tender_id}/.batch_{batch_id}"
+
+        try:
+            blob_client = self.container_client.get_blob_client(
+                batch_blob_name)
+            properties = blob_client.get_blob_properties()
+
+            if not properties.metadata:
+                return None
+
+            # Get existing metadata
+            metadata = dict(properties.metadata)
+
+            # Update with new values (sanitize strings, serialize objects)
+            for key, value in updates.items():
+                if value is None:
+                    metadata[key] = ''
+                elif isinstance(value, (list, dict)):
+                    metadata[key] = json.dumps(value)
+                elif isinstance(value, (int, float)):
+                    metadata[key] = str(value)
+                else:
+                    metadata[key] = sanitize_metadata_value(str(value))
+
+            # Write updated metadata
+            blob_client.set_blob_metadata(metadata)
+
+            logger.info(
+                f"Updated batch {batch_id} with fields: {list(updates.keys())}")
+
+            # Return updated batch
+            return self.get_batch(tender_id, batch_id)
+
+        except Exception as e:
+            logger.error(f"Error updating batch {batch_id}: {e}")
             return None
 
     def get_batch_files(self, tender_id: str, batch_id: str) -> List[Dict]:

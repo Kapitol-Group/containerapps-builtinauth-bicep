@@ -6,6 +6,7 @@ import './BatchViewer.css';
 interface BatchViewerProps {
     batch: Batch;
     files: TenderFile[];
+    tenderId: string;
     onClose: () => void;
     onFileSelect: (file: TenderFile) => void;
     loading?: boolean;
@@ -14,15 +15,50 @@ interface BatchViewerProps {
 const BatchViewer: React.FC<BatchViewerProps> = ({
     batch,
     files,
+    tenderId,
     onClose,
     onFileSelect,
     loading = false,
 }) => {
     const [selectedFile, setSelectedFile] = useState<TenderFile | null>(null);
+    const [retrying, setRetrying] = useState(false);
 
     const handleFileSelect = (file: TenderFile) => {
         setSelectedFile(file);
         onFileSelect(file);
+    };
+
+    const handleRetry = async () => {
+        if (!confirm('Retry submission for this batch? This will resubmit the extraction job to UiPath.')) {
+            return;
+        }
+
+        setRetrying(true);
+        try {
+            const response = await fetch(
+                `/api/tenders/${tenderId}/batches/${batch.batch_id}/retry`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                }
+            );
+
+            const data = await response.json();
+
+            if (data.success) {
+                alert('Batch retry initiated. Processing in background.');
+                onClose(); // Return to batch list
+            } else {
+                alert(`Retry failed: ${data.error}`);
+            }
+        } catch (error) {
+            console.error('Error retrying batch:', error);
+            alert('Failed to retry batch. Please try again.');
+        } finally {
+            setRetrying(false);
+        }
     };
 
     const formatDate = (dateString: string) => {
@@ -48,6 +84,8 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                 return '';
         }
     };
+
+    const canRetry = batch.status === 'failed' || batch.status === 'pending';
 
     if (loading) {
         return (
@@ -83,13 +121,61 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                                 <strong>Job ID:</strong> {batch.job_id}
                             </span>
                         )}
+                        {batch.uipath_reference && (
+                            <span className="metadata-item">
+                                <strong>UiPath Ref:</strong> {batch.uipath_reference}
+                            </span>
+                        )}
                         <span className="metadata-item coords-item">
                             <strong>Title Block:</strong> X:{batch.title_block_coords.x} Y:{batch.title_block_coords.y} 
                             {' '}W:{batch.title_block_coords.width} H:{batch.title_block_coords.height}
                         </span>
                     </div>
+                    {canRetry && (
+                        <button
+                            className="retry-button"
+                            onClick={handleRetry}
+                            disabled={retrying}
+                        >
+                            {retrying ? 'Retrying...' : '🔄 Retry Submission'}
+                        </button>
+                    )}
                 </div>
             </div>
+
+            {/* Display submission attempts history if available */}
+            {batch.submission_attempts && batch.submission_attempts.length > 0 && (
+                <div className="submission-history">
+                    <h3>Submission Attempts</h3>
+                    <div className="attempts-list">
+                        {batch.submission_attempts.map((attempt, index) => (
+                            <div key={index} className={`attempt-item attempt-${attempt.status}`}>
+                                <span className="attempt-number">#{index + 1}</span>
+                                <span className="attempt-time">{formatDate(attempt.timestamp)}</span>
+                                <span className={`attempt-status status-${attempt.status}`}>
+                                    {attempt.status}
+                                </span>
+                                {attempt.reference && (
+                                    <span className="attempt-reference">Ref: {attempt.reference}</span>
+                                )}
+                                {attempt.error && (
+                                    <span className="attempt-error" title={attempt.error}>
+                                        ⚠️ {attempt.error.substring(0, 50)}{attempt.error.length > 50 ? '...' : ''}
+                                    </span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Display last error if available */}
+            {batch.last_error && (
+                <div className="last-error-box">
+                    <h4>⚠️ Last Error</h4>
+                    <p>{batch.last_error}</p>
+                </div>
+            )}
 
             <div className="batch-files-section">
                 <FileBrowser

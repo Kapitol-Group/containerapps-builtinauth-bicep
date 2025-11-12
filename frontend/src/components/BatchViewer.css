@@ -110,6 +110,143 @@
     color: #842029;
 }
 
+/* Retry Button */
+.retry-button {
+    margin-top: 0.5rem;
+    padding: 0.5rem 1rem;
+    background-color: #0d6efd;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+.retry-button:hover:not(:disabled) {
+    background-color: #0b5ed7;
+}
+
+.retry-button:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* Submission History */
+.submission-history {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 1rem 0;
+}
+
+.submission-history h3 {
+    margin: 0 0 0.75rem;
+    font-size: 1rem;
+    color: #333;
+}
+
+.attempts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.attempt-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    background: white;
+    border-left: 3px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.85rem;
+}
+
+.attempt-item.attempt-success {
+    border-left-color: #0f5132;
+}
+
+.attempt-item.attempt-failed {
+    border-left-color: #842029;
+}
+
+.attempt-item.attempt-in_progress {
+    border-left-color: #084298;
+}
+
+.attempt-number {
+    font-weight: 700;
+    color: #666;
+    min-width: 30px;
+}
+
+.attempt-time {
+    color: #666;
+    min-width: 180px;
+}
+
+.attempt-status {
+    padding: 0.2rem 0.5rem;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.attempt-status.status-success {
+    background-color: #d1e7dd;
+    color: #0f5132;
+}
+
+.attempt-status.status-failed {
+    background-color: #f8d7da;
+    color: #842029;
+}
+
+.attempt-status.status-in_progress {
+    background-color: #cfe2ff;
+    color: #084298;
+}
+
+.attempt-reference {
+    font-family: 'Courier New', monospace;
+    font-size: 0.75rem;
+    color: #0d6efd;
+}
+
+.attempt-error {
+    color: #842029;
+    font-size: 0.8rem;
+    cursor: help;
+    flex: 1;
+}
+
+/* Last Error Box */
+.last-error-box {
+    background: #fff3cd;
+    border: 1px solid #ffc107;
+    border-radius: 4px;
+    padding: 1rem;
+    margin: 1rem 1rem 0;
+}
+
+.last-error-box h4 {
+    margin: 0 0 0.5rem;
+    font-size: 0.9rem;
+    color: #856404;
+}
+
+.last-error-box p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #856404;
+    word-break: break-word;
+}
+
 .batch-files-section {
     flex: 1;
     display: flex;
@@ -157,6 +294,19 @@
     }
 
     .close-button {
+        width: 100%;
+    }
+
+    .attempt-item {
+        flex-wrap: wrap;
+    }
+
+    .attempt-time {
+        min-width: auto;
+        width: 100%;
+    }
+
+    .attempt-error {
         width: 100%;
     }
 }

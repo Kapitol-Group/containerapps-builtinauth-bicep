@@ -50,6 +50,17 @@ export interface Batch {
     submitted_by: string;
     file_count: number;
     job_id?: string;
+    // Enhanced tracking fields for retry/failure handling
+    submission_attempts?: Array<{
+        timestamp: string;
+        status: string;
+        reference?: string;
+        error?: string;
+    }>;
+    last_error?: string;
+    uipath_reference?: string;
+    uipath_submission_id?: string;
+    uipath_project_id?: string;
 }
 
 export interface BatchWithFiles {

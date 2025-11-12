@@ -3,7 +3,8 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 from flask import Flask, jsonify, render_template, request
@@ -212,10 +213,25 @@ def _process_uipath_submission_async(
     """
     Background worker to submit extraction job to UiPath.
     Runs in separate thread to avoid blocking the HTTP response.
+    Updates batch metadata with success/failure details.
     """
     try:
         logger.info(
             f"[Background] Starting UiPath submission for batch {batch_id}")
+
+        # Get current batch to track attempts
+        batch = blob_service.get_batch(tender_id, batch_id)
+        attempts = batch.get('submission_attempts', []) if batch else []
+
+        # Record attempt start
+        attempts.append({
+            'timestamp': datetime.utcnow().isoformat(),
+            'status': 'in_progress'
+        })
+
+        blob_service.update_batch(tender_id, batch_id, {
+            'submission_attempts': attempts
+        })
 
         job = uipath_client.submit_extraction_job(
             tender_id=tender_name,
@@ -232,20 +248,163 @@ def _process_uipath_submission_async(
             f"[Background] Successfully submitted batch {batch_id} to UiPath with reference {job.get('reference')}"
         )
 
-        # TODO: Optionally update batch metadata blob with submission details
-        # For now, we just log the success
+        # Update batch with success details
+        attempts[-1]['status'] = 'success'
+        attempts[-1]['reference'] = job.get('reference')
+
+        blob_service.update_batch(tender_id, batch_id, {
+            'status': 'running',
+            'uipath_reference': job.get('reference', ''),
+            'uipath_submission_id': job.get('submission_id', ''),
+            'uipath_project_id': job.get('project_id', ''),
+            'submission_attempts': attempts,
+            'last_error': ''
+        })
 
     except ValueError as user_error:
-        # User validation failed - log error (batch already created, can't rollback at this point)
+        # User validation failed - update batch with error
         logger.error(
             f"[Background] User validation failed for batch {batch_id}: {str(user_error)}")
-        # TODO: Update batch status to 'failed' in blob storage
+
+        try:
+            batch = blob_service.get_batch(tender_id, batch_id)
+            attempts = batch.get('submission_attempts', []) if batch else []
+            if attempts:
+                attempts[-1]['status'] = 'failed'
+                attempts[-1]['error'] = str(user_error)
+
+            blob_service.update_batch(tender_id, batch_id, {
+                'status': 'failed',
+                'submission_attempts': attempts,
+                'last_error': f'User validation failed: {str(user_error)}'
+            })
+        except Exception as update_error:
+            logger.error(
+                f"[Background] Failed to update batch status: {update_error}")
 
     except Exception as e:
-        # UiPath submission failed - log error
+        # UiPath submission failed - update batch with error
         logger.error(
             f"[Background] UiPath submission failed for batch {batch_id}: {str(e)}", exc_info=True)
-        # TODO: Update batch status to 'failed' in blob storage
+
+        try:
+            batch = blob_service.get_batch(tender_id, batch_id)
+            attempts = batch.get('submission_attempts', []) if batch else []
+            if attempts:
+                attempts[-1]['status'] = 'failed'
+                attempts[-1]['error'] = str(e)
+
+            blob_service.update_batch(tender_id, batch_id, {
+                'status': 'failed',
+                'submission_attempts': attempts,
+                'last_error': str(e)
+            })
+        except Exception as update_error:
+            logger.error(
+                f"[Background] Failed to update batch status: {update_error}")
+
+
+def retry_stuck_batches():
+    """
+    Background worker that periodically retries batches stuck in 'pending' status.
+    Runs every 5 minutes to find and retry batches that failed to submit to UiPath.
+    """
+    logger.info("[Retry Worker] Starting stuck batch retry worker")
+
+    while True:
+        try:
+            # Sleep first to allow app startup to complete
+            time.sleep(300)  # 5 minutes
+
+            logger.info("[Retry Worker] Checking for stuck batches...")
+
+            # Find all tenders
+            tenders = blob_service.list_tenders()
+            stuck_count = 0
+            retry_count = 0
+
+            for tender in tenders:
+                tender_id = tender['id']
+
+                try:
+                    batches = blob_service.list_batches(tender_id)
+
+                    for batch in batches:
+                        # Find batches stuck in pending for > 5 minutes
+                        if batch.get('status') == 'pending':
+                            try:
+                                submitted_at = datetime.fromisoformat(
+                                    batch['submitted_at'])
+                                age = datetime.utcnow() - submitted_at
+
+                                if age > timedelta(minutes=5):
+                                    stuck_count += 1
+                                    logger.warning(
+                                        f"[Retry Worker] Found stuck batch {batch['batch_id']} in tender {tender_id} "
+                                        f"(age: {int(age.total_seconds()//60)} min)"
+                                    )
+
+                                    # Retry UiPath submission
+                                    try:
+                                        # Extract necessary fields from batch metadata
+                                        category = batch.get('discipline') or batch.get(
+                                            'destination', 'Unknown')
+
+                                        job = uipath_client.submit_extraction_job(
+                                            tender_id=tender_id,
+                                            file_paths=batch['file_paths'],
+                                            discipline=category,
+                                            title_block_coords=batch['title_block_coords'],
+                                            submitted_by=batch.get(
+                                                'submitted_by', 'System'),
+                                            batch_id=batch['batch_id'],
+                                            sharepoint_folder_path=None,  # Not stored in batch metadata
+                                            output_folder_path=None
+                                        )
+
+                                        # Update status to running on success
+                                        blob_service.update_batch_status(
+                                            tender_id, batch['batch_id'], 'running')
+                                        retry_count += 1
+
+                                        logger.info(
+                                            f"[Retry Worker] Successfully retried batch {batch['batch_id']} "
+                                            f"with reference {job.get('reference')}"
+                                        )
+
+                                    except Exception as retry_error:
+                                        logger.error(
+                                            f"[Retry Worker] Retry failed for batch {batch['batch_id']}: {str(retry_error)}"
+                                        )
+                                        # Leave in pending, will retry again in next cycle
+
+                            except (ValueError, KeyError) as parse_error:
+                                logger.error(
+                                    f"[Retry Worker] Error parsing batch {batch.get('batch_id')}: {parse_error}"
+                                )
+
+                except Exception as tender_error:
+                    logger.error(
+                        f"[Retry Worker] Error processing tender {tender_id}: {tender_error}"
+                    )
+
+            if stuck_count > 0:
+                logger.info(
+                    f"[Retry Worker] Retry cycle complete: Found {stuck_count} stuck batches, "
+                    f"successfully retried {retry_count}"
+                )
+            else:
+                logger.debug("[Retry Worker] No stuck batches found")
+
+        except Exception as e:
+            logger.error(
+                f"[Retry Worker] Error in retry loop: {str(e)}", exc_info=True)
+
+
+# Start retry worker thread
+retry_thread = threading.Thread(target=retry_stuck_batches, daemon=True)
+retry_thread.start()
+logger.info("Started retry worker thread")
 
 
 @app.get('/api/tenders/<tender_id>')
@@ -579,6 +738,85 @@ def update_batch_status(tender_id: str, batch_id: str):
     except Exception as e:
         logger.error(
             f"Failed to update batch {batch_id} status: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.post('/api/tenders/<tender_id>/batches/<batch_id>/retry')
+def retry_batch(tender_id: str, batch_id: str):
+    """Manually retry a failed or stuck batch submission"""
+    try:
+        # Verify batch exists
+        batch = blob_service.get_batch(tender_id, batch_id)
+        if not batch:
+            return jsonify({
+                'success': False,
+                'error': 'Batch not found'
+            }), 404
+
+        # Check if batch is in a retriable state
+        status = batch.get('status', '')
+        if status not in ['pending', 'failed']:
+            return jsonify({
+                'success': False,
+                'error': f'Batch cannot be retried. Current status: {status}. Only pending or failed batches can be retried.'
+            }), 400
+
+        # Get tender info for submission
+        tender = blob_service.get_tender(tender_id)
+        if not tender:
+            return jsonify({
+                'success': False,
+                'error': 'Tender not found'
+            }), 404
+
+        tender_name = tender.get('name', tender_id)
+
+        # Get batch details
+        file_paths = batch.get('file_paths', [])
+        category = batch.get('category', '')
+        title_block_coords = batch.get('title_block_coords', {})
+        user_email = batch.get('created_by', 'system')
+        sharepoint_folder_path = batch.get('sharepoint_folder_path', '')
+        output_folder_path = batch.get('output_folder_path', '')
+
+        if not file_paths:
+            return jsonify({
+                'success': False,
+                'error': 'Batch has no files to process'
+            }), 400
+
+        # Spawn background thread to retry submission
+        logger.info(
+            f"Manual retry initiated for batch {batch_id} in tender {tender_id}")
+
+        retry_thread = threading.Thread(
+            target=_process_uipath_submission_async,
+            args=(
+                tender_id,
+                tender_name,
+                batch_id,
+                file_paths,
+                category,
+                title_block_coords,
+                user_email,
+                sharepoint_folder_path,
+                output_folder_path
+            ),
+            daemon=True
+        )
+        retry_thread.start()
+
+        return jsonify({
+            'success': True,
+            'message': 'Batch retry initiated. Processing in background.'
+        }), 202
+
+    except Exception as e:
+        logger.error(
+            f"Failed to retry batch {batch_id}: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)

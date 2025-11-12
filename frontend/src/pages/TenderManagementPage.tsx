@@ -233,6 +233,7 @@ const TenderManagementPage: React.FC = () => {
               <BatchViewer
                 batch={selectedBatch.batch}
                 files={selectedBatch.files}
+                tenderId={tenderId!}
                 onClose={handleCloseBatchViewer}
                 onFileSelect={handleFileSelect}
                 loading={batchLoading}
