@@ -32,6 +32,7 @@ class TenderSubmission:
         is_addendum (bool):
         sharepoint_path (None | str | Unset):
         output_location (None | str | Unset):
+        folder_list (None | str | Unset):
         created_by (SystemUser | Unset):
         update_time (datetime.datetime | None | Unset):
         create_time (datetime.datetime | Unset):
@@ -47,6 +48,7 @@ class TenderSubmission:
     is_addendum: bool
     sharepoint_path: None | str | Unset = UNSET
     output_location: None | str | Unset = UNSET
+    folder_list: None | str | Unset = UNSET
     created_by: SystemUser | Unset = UNSET
     update_time: datetime.datetime | None | Unset = UNSET
     create_time: datetime.datetime | Unset = UNSET
@@ -78,6 +80,12 @@ class TenderSubmission:
             output_location = UNSET
         else:
             output_location = self.output_location
+
+        folder_list: None | str | Unset
+        if isinstance(self.folder_list, Unset):
+            folder_list = UNSET
+        else:
+            folder_list = self.folder_list
 
         created_by: dict[str, Any] | Unset = UNSET
         if not isinstance(self.created_by, Unset):
@@ -119,6 +127,8 @@ class TenderSubmission:
             field_dict["SharepointPath"] = sharepoint_path
         if output_location is not UNSET:
             field_dict["OutputLocation"] = output_location
+        if folder_list is not UNSET:
+            field_dict["FolderList"] = folder_list
         if created_by is not UNSET:
             field_dict["CreatedBy"] = created_by
         if update_time is not UNSET:
@@ -168,6 +178,15 @@ class TenderSubmission:
             return cast(None | str | Unset, data)
 
         output_location = _parse_output_location(d.pop("OutputLocation", UNSET))
+
+        def _parse_folder_list(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        folder_list = _parse_folder_list(d.pop("FolderList", UNSET))
 
         _created_by = d.pop("CreatedBy", UNSET)
         created_by: SystemUser | Unset
@@ -223,6 +242,7 @@ class TenderSubmission:
             is_addendum=is_addendum,
             sharepoint_path=sharepoint_path,
             output_location=output_location,
+            folder_list=folder_list,
             created_by=created_by,
             update_time=update_time,
             create_time=create_time,
