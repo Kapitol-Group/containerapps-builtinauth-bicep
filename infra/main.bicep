@@ -23,6 +23,13 @@ param chatHistoryContainerKapCoach string
 @description('Topic history container name for KapCoach')
 param topicHistoryContainerKapCoach string
 
+@secure()
+@description('Optional: Service Principal Client Secret for authentication (bypasses IMDS endpoint)')
+param servicePrincipalClientSecret string = ''
+
+@description('Optional: Service Principal Client ID for authentication (bypasses IMDS endpoint)')
+param servicePrincipalClientId string = ''
+
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
 var prefix = toLower('${name}-${resourceToken}')
@@ -61,6 +68,8 @@ module aca 'aca.bicep' = {
     chatHistoryDatabase: chatHistoryDatabase
     chatHistoryContainerKapCoach: chatHistoryContainerKapCoach
     topicHistoryContainerKapCoach: topicHistoryContainerKapCoach
+    servicePrincipalClientSecret: servicePrincipalClientSecret
+    servicePrincipalClientId: servicePrincipalClientId
     exists: acaExists
   }
   dependsOn: [

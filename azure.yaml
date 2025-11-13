@@ -5,6 +5,12 @@ metadata:
   template: containerapps-builtinauth-bicep0.1.0
 requiredVersions:
     azd: ">= 1.12.0"
+
+infra:
+  parameters:
+    servicePrincipalClientId: "${SERVICE_PRINCIPAL_CLIENT_ID}"
+    servicePrincipalClientSecret: "${SERVICE_PRINCIPAL_CLIENT_SECRET}"
+
 services:
   aca:
     project: .

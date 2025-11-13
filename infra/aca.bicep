@@ -12,6 +12,13 @@ param chatHistoryContainerKapCoach string
 param topicHistoryContainerKapCoach string
 param exists bool
 
+@secure()
+@description('Optional: Service Principal Client Secret for authentication (bypasses IMDS endpoint)')
+param servicePrincipalClientSecret string = ''
+
+@description('Optional: Service Principal Client ID for authentication (bypasses IMDS endpoint)')
+param servicePrincipalClientId string = ''
+
 resource acaIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
   location: location
@@ -48,7 +55,15 @@ module app 'core/host/container-app-upsert.bicep' = {
       }
       {
         name: 'AZURE_CLIENT_ID'
-        value: acaIdentity.properties.clientId
+        value: !empty(servicePrincipalClientId) ? servicePrincipalClientId : acaIdentity.properties.clientId
+      }
+      {
+        name: 'AZURE_TENANT_ID'
+        value: tenant().tenantId
+      }
+      {
+        name: 'AZURE_CLIENT_SECRET'
+        secretRef: 'azure-client-secret'
       }
     ]
     targetPort: 50505
@@ -56,6 +71,10 @@ module app 'core/host/container-app-upsert.bicep' = {
       {
         name: 'override-use-mi-fic-assertion-client-id'
         value: acaIdentity.properties.clientId
+      }
+      {
+        name: 'azure-client-secret'
+        value: !empty(servicePrincipalClientSecret) ? servicePrincipalClientSecret : 'placeholder'
       }
     ]
   }

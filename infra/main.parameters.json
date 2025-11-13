@@ -55,6 +55,12 @@
       },
       "topicHistoryContainerKapCoach": {
         "value": "${AZURE_TOPIC_HISTORY_CONTAINER_KAPCOACH}"
+      },
+      "servicePrincipalClientSecret": {
+        "value": "${SERVICE_PRINCIPAL_CLIENT_SECRET}"
+      },
+      "servicePrincipalClientId": {
+        "value": "${SERVICE_PRINCIPAL_CLIENT_ID}"
       }
     }
 }
