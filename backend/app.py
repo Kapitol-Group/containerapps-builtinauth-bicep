@@ -221,7 +221,8 @@ def _process_uipath_submission_async(
     title_block_coords: dict,
     user_email: str,
     sharepoint_folder_path: str,
-    output_folder_path: str
+    output_folder_path: str,
+    folder_list: list = None
 ):
     """
     Background worker to submit extraction job to UiPath.
@@ -254,7 +255,8 @@ def _process_uipath_submission_async(
             submitted_by=user_email,
             batch_id=batch_id,
             sharepoint_folder_path=sharepoint_folder_path,
-            output_folder_path=output_folder_path
+            output_folder_path=output_folder_path,
+            folder_list=folder_list
         )
 
         logger.info(
@@ -379,6 +381,35 @@ def retry_stuck_batches():
                                                 f"[Retry Worker] Failed to update batch status: {update_error}")
                                         continue
 
+                                    # Check TOTAL attempts (not just failed) to catch infinite loops
+                                    # If we have >5 total attempts, something is wrong (normal is 1 success or <=3 failures)
+                                    if len(submission_attempts) > 5:
+                                        logger.error(
+                                            f"[Retry Worker] Batch {batch['batch_id']} has {len(submission_attempts)} attempts. "
+                                            f"This indicates an infinite retry loop. Marking as failed."
+                                        )
+                                        try:
+                                            # Use simple update to avoid metadata size issues
+                                            blob_service.update_batch(tender_id, batch['batch_id'], {
+                                                'status': 'failed',
+                                                'last_error': f'Too many submission attempts ({len(submission_attempts)}). Likely infinite retry loop or metadata size limit exceeded.'
+                                            })
+                                        except Exception as update_error:
+                                            logger.error(
+                                                f"[Retry Worker] Failed to mark looping batch as failed: {update_error}")
+                                            # If we can't even update the status, try to delete the batch to stop the loop
+                                            try:
+                                                logger.warning(
+                                                    f"[Retry Worker] Attempting to delete stuck batch {batch['batch_id']}")
+                                                blob_service.delete_batch(
+                                                    tender_id, batch['batch_id'])
+                                            except Exception as delete_error:
+                                                logger.critical(
+                                                    f"[Retry Worker] CRITICAL: Cannot update or delete looping batch {batch['batch_id']}. "
+                                                    f"Manual intervention required. Error: {delete_error}"
+                                                )
+                                        continue
+
                                     if len(failed_attempts) >= 3:
                                         logger.warning(
                                             f"[Retry Worker] Batch {batch['batch_id']} has reached max retry limit (3 failed attempts). "
@@ -415,14 +446,34 @@ def retry_stuck_batches():
                                         )
 
                                         # Update status to running on success
-                                        blob_service.update_batch_status(
-                                            tender_id, batch['batch_id'], 'running')
-                                        retry_count += 1
+                                        try:
+                                            blob_service.update_batch_status(
+                                                tender_id, batch['batch_id'], 'running')
+                                            retry_count += 1
 
-                                        logger.info(
-                                            f"[Retry Worker] Successfully retried batch {batch['batch_id']} "
-                                            f"with reference {job.get('reference')}"
-                                        )
+                                            logger.info(
+                                                f"[Retry Worker] Successfully retried batch {batch['batch_id']} "
+                                                f"with reference {job.get('reference')}"
+                                            )
+                                        except Exception as status_error:
+                                            # CRITICAL: Submission succeeded but status update failed
+                                            # This causes infinite retry loops - mark as failed to stop the loop
+                                            error_msg = str(status_error)
+                                            logger.error(
+                                                f"[Retry Worker] UiPath submission succeeded for batch {batch['batch_id']} "
+                                                f"but status update failed: {error_msg}. Marking as failed to prevent loop."
+                                            )
+                                            try:
+                                                # Try simple status update without adding to submission_attempts
+                                                blob_service.update_batch(tender_id, batch['batch_id'], {
+                                                    'status': 'failed',
+                                                    'last_error': f'Submitted to UiPath but metadata update failed (likely size limit): {error_msg}. Check UiPath for results.'
+                                                })
+                                            except Exception as final_error:
+                                                logger.critical(
+                                                    f"[Retry Worker] CRITICAL: Batch {batch['batch_id']} submitted to UiPath "
+                                                    f"but cannot update status. Manual cleanup required. Error: {final_error}"
+                                                )
 
                                     except Exception as retry_error:
                                         logger.error(
@@ -843,9 +894,14 @@ def retry_batch(tender_id: str, batch_id: str):
         file_paths = batch.get('file_paths', [])
         category = batch.get('category', '')
         title_block_coords = batch.get('title_block_coords', {})
-        user_email = batch.get('created_by', 'system')
         sharepoint_folder_path = batch.get('sharepoint_folder_path', '')
         output_folder_path = batch.get('output_folder_path', '')
+        folder_list = batch.get('folder_list', [])
+
+        # Get email from current user making the retry request (not from old batch metadata)
+        # This ensures we use a valid email even for legacy batches with display names
+        user_info = extract_user_info(request.headers)
+        user_email = user_info.get('email') or user_info.get('name', 'system')
 
         if not file_paths:
             return jsonify({
@@ -855,7 +911,7 @@ def retry_batch(tender_id: str, batch_id: str):
 
         # Spawn background thread to retry submission
         logger.info(
-            f"Manual retry initiated for batch {batch_id} in tender {tender_id}")
+            f"Manual retry initiated for batch {batch_id} in tender {tender_id} by {user_email}")
 
         retry_thread = threading.Thread(
             target=_process_uipath_submission_async,
@@ -868,7 +924,8 @@ def retry_batch(tender_id: str, batch_id: str):
                 title_block_coords,
                 user_email,
                 sharepoint_folder_path,
-                output_folder_path
+                output_folder_path,
+                folder_list
             ),
             daemon=True
         )
@@ -1028,6 +1085,9 @@ def queue_extraction():
         sharepoint_folder_path = data.get('sharepoint_folder_path')
         output_folder_path = data.get('output_folder_path')
 
+        # Get folder list from request (list of folder names)
+        folder_list = data.get('folder_list', [])
+
         if not all([tender_id, file_paths, category, title_block_coords]):
             return jsonify({
                 'success': False,
@@ -1049,7 +1109,10 @@ def queue_extraction():
             title_block_coords=title_block_coords,
             submitted_by=user_info.get(
                 'email') or user_info.get('name', 'Unknown'),
-            job_id=None  # Will be updated after UiPath submission
+            job_id=None,  # Will be updated after UiPath submission
+            sharepoint_folder_path=sharepoint_folder_path,
+            output_folder_path=output_folder_path,
+            folder_list=folder_list
         )
 
         # Update file categories and batch references
@@ -1073,7 +1136,8 @@ def queue_extraction():
                 title_block_coords,
                 user_info.get('email', 'Unknown'),
                 sharepoint_folder_path,
-                output_folder_path
+                output_folder_path,
+                folder_list
             ),
             daemon=True  # Daemon thread will not block app shutdown
         )

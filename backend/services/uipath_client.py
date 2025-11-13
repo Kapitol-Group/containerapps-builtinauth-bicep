@@ -382,7 +382,8 @@ class UiPathClient:
                                   reference: str,
                                   user: TitleBlockValidationUsers,
                                   sharepoint_path: Optional[str] = None,
-                                  output_location: Optional[str] = None) -> TenderSubmission:
+                                  output_location: Optional[str] = None,
+                                  folder_list: Optional[List[str]] = None) -> TenderSubmission:
         """
         Create a TenderSubmission record in Entity Store
 
@@ -406,6 +407,12 @@ class UiPathClient:
             print(
                 f"Creating TenderSubmission: Reference={reference}, ProjectID={project.id}")
 
+            # Convert folder_list to semicolon-delimited string
+            folder_list_str = None
+            if folder_list:
+                folder_list_str = ';'.join(folder_list)
+                print(f"Folder list: {folder_list_str}")
+
             submission = TenderSubmission(
                 project_id=project,
                 reference=reference,
@@ -414,7 +421,8 @@ class UiPathClient:
                 archive_name="n/a",
                 is_addendum=False,
                 sharepoint_path=sharepoint_path,
-                output_location=output_location
+                output_location=output_location,
+                folder_list=folder_list_str
             )
 
             # Make direct HTTP request to avoid parsing issues with expansion_level=0
@@ -702,7 +710,8 @@ class UiPathClient:
                               submitted_by: str = 'Unknown',
                               batch_id: Optional[str] = None,
                               sharepoint_folder_path: Optional[str] = None,
-                              output_folder_path: Optional[str] = None) -> Dict:
+                              output_folder_path: Optional[str] = None,
+                              folder_list: Optional[List[str]] = None) -> Dict:
         """
         Submit a drawing metadata extraction job via Entity Store and UiPath queue
 
@@ -715,6 +724,7 @@ class UiPathClient:
             batch_id: Optional batch identifier for backward compatibility
             sharepoint_folder_path: SharePoint folder path for input documents
             output_folder_path: SharePoint folder path for output location
+            folder_list: List of available destination folder names (stored as semicolon-delimited string)
 
         Returns:
             Job information dictionary with submission details
@@ -754,7 +764,7 @@ class UiPathClient:
 
             # Step 4: Create TenderSubmission
             submission = self._create_tender_submission(
-                project, reference, user, sharepoint_folder_path, output_folder_path)
+                project, reference, user, sharepoint_folder_path, output_folder_path, folder_list)
 
             # Step 5: Create TenderFile records and build queue items
             queue_items = []

@@ -423,7 +423,8 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
         coords,
         batchName,
         tender?.sharepoint_folder_path,
-        tender?.output_folder_path
+        tender?.output_folder_path,
+        destinations.map(d => d.name)
       );
       
       // Close modal immediately - batch is queued and processing in background

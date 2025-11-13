@@ -449,7 +449,10 @@ class BlobStorageService:
 
     def create_batch(self, tender_id: str, batch_name: str, discipline: str,
                      file_paths: List[str], title_block_coords: Dict,
-                     submitted_by: str, job_id: Optional[str] = None) -> Dict:
+                     submitted_by: str, job_id: Optional[str] = None,
+                     sharepoint_folder_path: Optional[str] = None,
+                     output_folder_path: Optional[str] = None,
+                     folder_list: Optional[List[str]] = None) -> Dict:
         """
         Create a new extraction batch
 
@@ -461,6 +464,9 @@ class BlobStorageService:
             title_block_coords: Dictionary with x, y, width, height coordinates
             submitted_by: User who submitted the batch
             job_id: UiPath job ID (optional)
+            sharepoint_folder_path: SharePoint input folder path (optional, for retry)
+            output_folder_path: SharePoint output folder path (optional, for retry)
+            folder_list: List of available destination folders (optional, for retry)
 
         Returns:
             Batch information dictionary
@@ -491,7 +497,11 @@ class BlobStorageService:
             'last_error': '',
             'uipath_reference': '',
             'uipath_submission_id': '',
-            'uipath_project_id': ''
+            'uipath_project_id': '',
+            # SharePoint paths and folder list for retry support
+            'sharepoint_folder_path': sanitize_metadata_value(sharepoint_folder_path) if sharepoint_folder_path else '',
+            'output_folder_path': sanitize_metadata_value(output_folder_path) if output_folder_path else '',
+            'folder_list': json.dumps(folder_list) if folder_list else json.dumps([])
         }
 
         blob_client = self.container_client.get_blob_client(batch_blob_name)
@@ -601,7 +611,11 @@ class BlobStorageService:
                     'last_error': properties.metadata.get('last_error', ''),
                     'uipath_reference': properties.metadata.get('uipath_reference', ''),
                     'uipath_submission_id': properties.metadata.get('uipath_submission_id', ''),
-                    'uipath_project_id': properties.metadata.get('uipath_project_id', '')
+                    'uipath_project_id': properties.metadata.get('uipath_project_id', ''),
+                    # SharePoint paths and folder list for retry support
+                    'sharepoint_folder_path': properties.metadata.get('sharepoint_folder_path', ''),
+                    'output_folder_path': properties.metadata.get('output_folder_path', ''),
+                    'folder_list': json.loads(properties.metadata.get('folder_list', '[]'))
                 }
         except Exception as e:
             logger.error(f"Error getting batch {batch_id}: {e}")
