@@ -3,7 +3,27 @@ Authentication utilities for extracting user information from Container Apps hea
 """
 import base64
 import json
+from functools import wraps
 from typing import Dict, Optional
+
+from flask import request, jsonify
+
+
+def require_auth(f):
+    """
+    Decorator to require authentication on Flask routes.
+    Checks for X-MS-CLIENT-PRINCIPAL header from Container Apps built-in auth.
+    Returns 401 if not authenticated.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "X-MS-CLIENT-PRINCIPAL" not in request.headers:
+            return jsonify({
+                'success': False,
+                'error': 'Authentication required'
+            }), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
 
 def extract_user_info(headers, default_username="Unknown") -> Dict[str, str]:

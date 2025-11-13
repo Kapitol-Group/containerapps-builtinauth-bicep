@@ -16,7 +16,7 @@ import requests
 
 from services.blob_storage import BlobStorageService
 from services.uipath_client import UiPathClient
-from utils.auth import extract_user_info
+from utils.auth import extract_user_info, require_auth
 
 # Configure logging
 logging.basicConfig(
@@ -113,6 +113,7 @@ def hello():
 
 
 @app.get('/api/tenders')
+@require_auth
 def list_tenders():
     """List all tenders"""
     try:
@@ -132,6 +133,7 @@ def list_tenders():
 
 
 @app.post('/api/tenders')
+@require_auth
 def create_tender():
     """Create a new tender"""
     try:
@@ -355,19 +357,58 @@ def retry_stuck_batches():
                                         f"(age: {int(age.total_seconds()//60)} min)"
                                     )
 
+                                    # Check retry attempts to prevent infinite retries
+                                    submission_attempts = batch.get(
+                                        'submission_attempts', [])
+                                    failed_attempts = [
+                                        a for a in submission_attempts if a.get('status') == 'failed']
+
+                                    # Old batches (>24 hours) without submission tracking should be marked as failed
+                                    if age > timedelta(hours=24) and len(submission_attempts) == 0:
+                                        logger.warning(
+                                            f"[Retry Worker] Batch {batch['batch_id']} is very old ({int(age.total_seconds()//3600)} hours) "
+                                            f"with no tracked attempts. Marking as failed (legacy batch)."
+                                        )
+                                        try:
+                                            blob_service.update_batch(tender_id, batch['batch_id'], {
+                                                'status': 'failed',
+                                                'last_error': f'Legacy batch older than 24 hours with no submission tracking. Original submission failed.'
+                                            })
+                                        except Exception as update_error:
+                                            logger.error(
+                                                f"[Retry Worker] Failed to update batch status: {update_error}")
+                                        continue
+
+                                    if len(failed_attempts) >= 3:
+                                        logger.warning(
+                                            f"[Retry Worker] Batch {batch['batch_id']} has reached max retry limit (3 failed attempts). "
+                                            f"Marking as permanently failed."
+                                        )
+                                        try:
+                                            blob_service.update_batch(tender_id, batch['batch_id'], {
+                                                'status': 'failed',
+                                                'last_error': f'Maximum retry limit reached after {len(failed_attempts)} failed attempts'
+                                            })
+                                        except Exception as update_error:
+                                            logger.error(
+                                                f"[Retry Worker] Failed to update batch status: {update_error}")
+                                        continue
+
                                     # Retry UiPath submission
                                     try:
                                         # Extract necessary fields from batch metadata
                                         category = batch.get('discipline') or batch.get(
                                             'destination', 'Unknown')
+                                        # submitted_by should be email address (stored during batch creation)
+                                        submitted_by = batch.get(
+                                            'submitted_by', 'System')
 
                                         job = uipath_client.submit_extraction_job(
                                             tender_id=tender_id,
                                             file_paths=batch['file_paths'],
                                             discipline=category,
                                             title_block_coords=batch['title_block_coords'],
-                                            submitted_by=batch.get(
-                                                'submitted_by', 'System'),
+                                            submitted_by=submitted_by,
                                             batch_id=batch['batch_id'],
                                             sharepoint_folder_path=None,  # Not stored in batch metadata
                                             output_folder_path=None
@@ -387,7 +428,7 @@ def retry_stuck_batches():
                                         logger.error(
                                             f"[Retry Worker] Retry failed for batch {batch['batch_id']}: {str(retry_error)}"
                                         )
-                                        # Leave in pending, will retry again in next cycle
+                                        # Leave in pending, will retry again in next cycle (up to max limit)
 
                             except (ValueError, KeyError) as parse_error:
                                 logger.error(
@@ -419,6 +460,7 @@ logger.info("Started retry worker thread")
 
 
 @app.get('/api/tenders/<tender_id>')
+@require_auth
 def get_tender(tender_id: str):
     """Get tender details"""
     try:
@@ -441,6 +483,7 @@ def get_tender(tender_id: str):
 
 
 @app.delete('/api/tenders/<tender_id>')
+@require_auth
 def delete_tender(tender_id: str):
     """Delete a tender"""
     try:
@@ -463,6 +506,7 @@ def delete_tender(tender_id: str):
 
 
 @app.get('/api/tenders/<tender_id>/files')
+@require_auth
 def list_files(tender_id: str):
     """List files in a tender"""
     try:
@@ -484,6 +528,7 @@ def list_files(tender_id: str):
 
 
 @app.post('/api/tenders/<tender_id>/files')
+@require_auth
 def upload_file(tender_id: str):
     """Upload a file to a tender"""
     try:
@@ -531,6 +576,7 @@ def upload_file(tender_id: str):
 
 
 @app.get('/api/tenders/<tender_id>/files/<path:file_path>')
+@require_auth
 def download_file(tender_id: str, file_path: str):
     """Download a file from a tender"""
     try:
@@ -551,6 +597,7 @@ def download_file(tender_id: str, file_path: str):
 
 
 @app.put('/api/tenders/<tender_id>/files/<path:file_path>/category')
+@require_auth
 def update_file_category(tender_id: str, file_path: str):
     """Update file category"""
     try:
@@ -581,6 +628,7 @@ def update_file_category(tender_id: str, file_path: str):
 
 
 @app.delete('/api/tenders/<tender_id>/files/<path:file_path>')
+@require_auth
 def delete_file(tender_id: str, file_path: str):
     """Delete a file from a tender"""
     try:
@@ -604,6 +652,7 @@ def delete_file(tender_id: str, file_path: str):
 
 
 @app.post('/api/tenders/<tender_id>/batches')
+@require_auth
 def create_batch(tender_id: str):
     """Create a new extraction batch"""
     try:
@@ -633,14 +682,15 @@ def create_batch(tender_id: str):
         logger.info(
             f"Creating batch '{batch_name}' for tender {tender_id} with {len(file_paths)} files")
 
-        # Create batch
+        # Create batch (use email for UiPath user lookup, fallback to name if no email)
         batch = blob_service.create_batch(
             tender_id=tender_id,
             batch_name=batch_name,
             discipline=discipline,
             file_paths=file_paths,
             title_block_coords=title_block_coords,
-            submitted_by=user_info.get('name', 'Unknown'),
+            submitted_by=user_info.get(
+                'email') or user_info.get('name', 'Unknown'),
             job_id=None  # Will be set when UiPath job is submitted
         )
 
@@ -669,6 +719,7 @@ def create_batch(tender_id: str):
 
 
 @app.get('/api/tenders/<tender_id>/batches')
+@require_auth
 def list_batches(tender_id: str):
     """List all batches for a tender"""
     try:
@@ -687,6 +738,7 @@ def list_batches(tender_id: str):
 
 
 @app.get('/api/tenders/<tender_id>/batches/<batch_id>')
+@require_auth
 def get_batch(tender_id: str, batch_id: str):
     """Get batch details and files"""
     try:
@@ -717,6 +769,7 @@ def get_batch(tender_id: str, batch_id: str):
 
 
 @app.patch('/api/tenders/<tender_id>/batches/<batch_id>')
+@require_auth
 def update_batch_status(tender_id: str, batch_id: str):
     """Update batch status"""
     try:
@@ -756,6 +809,7 @@ def update_batch_status(tender_id: str, batch_id: str):
 
 
 @app.post('/api/tenders/<tender_id>/batches/<batch_id>/retry')
+@require_auth
 def retry_batch(tender_id: str, batch_id: str):
     """Manually retry a failed or stuck batch submission"""
     try:
@@ -835,6 +889,7 @@ def retry_batch(tender_id: str, batch_id: str):
 
 
 @app.delete('/api/tenders/<tender_id>/batches/<batch_id>')
+@require_auth
 def delete_batch(tender_id: str, batch_id: str):
     """Delete a batch (admin only - files remain categorized)"""
     try:
@@ -858,10 +913,96 @@ def delete_batch(tender_id: str, batch_id: str):
             'error': str(e)
         }), 500
 
+
+@app.post('/api/admin/purge-old-batches')
+@require_auth
+def purge_old_batches():
+    """
+    Admin endpoint to mark old stuck batches as failed.
+    Useful for cleaning up legacy batches that don't have submission tracking.
+    """
+    try:
+        # Optional query parameter for age threshold (default 24 hours)
+        age_hours = request.args.get('age_hours', 24, type=int)
+
+        logger.info(
+            f"[Admin] Starting manual purge of batches older than {age_hours} hours")
+
+        tenders = blob_service.list_tenders()
+        purged_count = 0
+        checked_count = 0
+        errors = []
+
+        for tender in tenders:
+            tender_id = tender['id']
+
+            try:
+                batches = blob_service.list_batches(tender_id)
+
+                for batch in batches:
+                    # Only process pending batches
+                    if batch.get('status') == 'pending':
+                        checked_count += 1
+
+                        try:
+                            submitted_at = datetime.fromisoformat(
+                                batch['submitted_at'])
+                            age = datetime.utcnow() - submitted_at
+                            submission_attempts = batch.get(
+                                'submission_attempts', [])
+
+                            # Mark as failed if old and no tracking
+                            if age > timedelta(hours=age_hours) and len(submission_attempts) == 0:
+                                batch_id = batch['batch_id']
+                                logger.info(
+                                    f"[Admin] Purging batch {batch_id} in tender {tender_id} "
+                                    f"(age: {int(age.total_seconds()//3600)} hours)"
+                                )
+
+                                blob_service.update_batch(tender_id, batch_id, {
+                                    'status': 'failed',
+                                    'last_error': f'Manually purged: Legacy batch older than {age_hours} hours with no submission tracking'
+                                })
+
+                                purged_count += 1
+
+                        except (ValueError, KeyError) as parse_error:
+                            error_msg = f"Error parsing batch {batch.get('batch_id')} in tender {tender_id}: {parse_error}"
+                            logger.error(f"[Admin] {error_msg}")
+                            errors.append(error_msg)
+
+            except Exception as tender_error:
+                error_msg = f"Error processing tender {tender_id}: {tender_error}"
+                logger.error(f"[Admin] {error_msg}")
+                errors.append(error_msg)
+
+        logger.info(
+            f"[Admin] Purge complete: Checked {checked_count} pending batches, purged {purged_count}")
+
+        return jsonify({
+            'success': True,
+            'message': f'Purge complete',
+            'data': {
+                'checked': checked_count,
+                'purged': purged_count,
+                'age_threshold_hours': age_hours,
+                'errors': errors if errors else None
+            }
+        })
+
+    except Exception as e:
+        logger.error(
+            f"[Admin] Purge operation failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 # UiPath API
 
 
 @app.post('/api/uipath/extract')
+@require_auth
 def queue_extraction():
     """Queue drawing metadata extraction via UiPath - creates batch and submits job"""
     try:
@@ -899,13 +1040,15 @@ def queue_extraction():
             f"Creating batch and queuing extraction for tender {tender_id}")
 
         # Create batch first (with both discipline and destination for compatibility)
+        # Use email for UiPath user lookup, fallback to name if no email
         batch = blob_service.create_batch(
             tender_id=tender_id,
             batch_name=batch_name,
             discipline=category,  # Store in discipline field for backward compatibility
             file_paths=file_paths,
             title_block_coords=title_block_coords,
-            submitted_by=user_info.get('name', 'Unknown'),
+            submitted_by=user_info.get(
+                'email') or user_info.get('name', 'Unknown'),
             job_id=None  # Will be updated after UiPath submission
         )
 
@@ -960,6 +1103,7 @@ def queue_extraction():
 
 
 @app.get('/api/uipath/jobs/<job_id>')
+@require_auth
 def get_job_status(job_id: str):
     """Get UiPath job status"""
     try:
@@ -978,6 +1122,7 @@ def get_job_status(job_id: str):
 
 
 @app.post('/api/sharepoint/validate')
+@require_auth
 def validate_sharepoint_path():
     """Validate SharePoint folder path"""
     try:
@@ -998,6 +1143,7 @@ def validate_sharepoint_path():
 
 
 @app.post('/api/sharepoint/list-folders')
+@require_auth
 def list_sharepoint_folders():
     """List subfolders in a SharePoint folder using Graph API"""
     try:
@@ -1086,6 +1232,7 @@ def list_sharepoint_folders():
 
 
 @app.post('/api/sharepoint/import-files')
+@require_auth
 def import_sharepoint_files():
     """Import files from SharePoint to blob storage (backend-driven)"""
     try:
@@ -1158,6 +1305,7 @@ def import_sharepoint_files():
 
 
 @app.get('/api/sharepoint/import-jobs/<job_id>')
+@require_auth
 def get_sharepoint_import_job_status(job_id: str):
     """Get status of a SharePoint import job"""
     try:
@@ -1314,7 +1462,7 @@ def _cleanup_import_job(job_id: str):
 
 @app.get('/api/health')
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint (unauthenticated for monitoring)"""
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.utcnow().isoformat()
@@ -1322,6 +1470,7 @@ def health_check():
 
 
 @app.get('/api/config')
+@require_auth
 def get_config():
     """Get frontend configuration from environment variables"""
     return jsonify({
