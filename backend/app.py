@@ -971,6 +971,162 @@ def delete_batch(tender_id: str, batch_id: str):
         }), 500
 
 
+@app.get('/api/tenders/<tender_id>/batches/<batch_id>/progress')
+@require_auth
+def get_batch_progress(tender_id: str, batch_id: str):
+    """
+    Get file-level progress for a batch by querying Entity Store
+
+    Returns aggregated status counts and per-file details including:
+    - Total file count
+    - Status breakdown (queued, extracted, failed, exported)
+    - Per-file metadata (status, drawing_number, etc.)
+    """
+    try:
+        # Get batch to retrieve CUID reference
+        batch = blob_service.get_batch(tender_id, batch_id)
+        if not batch:
+            return jsonify({
+                'success': False,
+                'error': 'Batch not found'
+            }), 404
+
+        reference = batch.get('uipath_reference')
+
+        # If batch not yet submitted to UiPath, return default progress
+        if not reference:
+            file_count = int(batch.get('file_count', 0))
+            logger.info(
+                f"Batch {batch_id} not yet submitted to UiPath. Returning default progress.")
+            return jsonify({
+                'success': True,
+                'data': {
+                    'batch_id': batch_id,
+                    'total_files': file_count,
+                    'status_counts': {
+                        'queued': file_count,
+                        'extracted': 0,
+                        'failed': 0,
+                        'exported': 0
+                    },
+                    'files': []
+                }
+            })
+
+        # Query Entity Store for file-level progress
+        logger.info(
+            f"Querying Entity Store progress for batch {batch_id} with reference {reference}")
+        progress = uipath_client.get_batch_progress(reference)
+
+        # Add batch_id to response
+        progress['batch_id'] = batch_id
+
+        return jsonify({
+            'success': True,
+            'data': progress
+        })
+
+    except Exception as e:
+        logger.error(
+            f"Failed to get batch progress for {batch_id}: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.post('/api/webhooks/uipath/batch-complete')
+def uipath_batch_complete_webhook():
+    """
+    Webhook endpoint for UiPath to notify when a batch is complete
+
+    Expected payload:
+    {
+        "reference": "cuid-reference-string",
+        "status": "completed" | "failed",
+        "completed_at": "ISO-8601 datetime"
+    }
+
+    Note: This endpoint does NOT require authentication since it's called by UiPath.
+    Security is handled via UiPath's webhook signing (TODO: implement signature validation).
+    """
+    try:
+        data = request.json
+
+        if not data:
+            return jsonify({
+                'success': False,
+                'error': 'Request body is required'
+            }), 400
+
+        reference = data.get('reference')
+        webhook_status = data.get('status')
+        completed_at = data.get('completed_at')
+
+        if not reference:
+            return jsonify({
+                'success': False,
+                'error': 'reference is required'
+            }), 400
+
+        if not webhook_status or webhook_status not in ['completed', 'failed']:
+            return jsonify({
+                'success': False,
+                'error': 'status must be "completed" or "failed"'
+            }), 400
+
+        logger.info(
+            f"Webhook received: Batch {reference} status={webhook_status}")
+
+        # Find batch by uipath_reference across all tenders
+        # Note: This is not the most efficient approach, but blob storage metadata
+        # doesn't support cross-tender queries. Consider caching or indexing if performance becomes an issue.
+        tenders = blob_service.list_tenders()
+        batch_found = False
+
+        for tender in tenders:
+            tender_id = tender['name']
+            batches = blob_service.list_batches(tender_id)
+
+            for batch in batches:
+                if batch.get('uipath_reference') == reference:
+                    batch_id = batch.get('batch_id')
+                    logger.info(
+                        f"Found batch {batch_id} in tender {tender_id} for reference {reference}")
+
+                    # Update batch status
+                    blob_service.update_batch_status(
+                        tender_id, batch_id, webhook_status)
+
+                    logger.info(
+                        f"Updated batch {batch_id} status to {webhook_status}")
+                    batch_found = True
+                    break
+
+            if batch_found:
+                break
+
+        if not batch_found:
+            logger.warning(
+                f"Webhook received for unknown reference: {reference}")
+            return jsonify({
+                'success': False,
+                'error': 'Batch not found for reference'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'message': 'Batch status updated'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.post('/api/admin/purge-old-batches')
 @require_auth
 def purge_old_batches():

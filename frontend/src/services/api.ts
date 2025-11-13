@@ -162,6 +162,40 @@ export const batchesApi = {
         return response.data.data;
     },
 
+    getProgress: async (tenderId: string, batchId: string): Promise<{
+        batch_id: string;
+        total_files: number;
+        status_counts: {
+            queued: number;
+            extracted: number;
+            failed: number;
+            exported: number;
+        };
+        files: Array<{
+            filename: string;
+            status: 'queued' | 'extracted' | 'failed' | 'exported';
+            drawing_number: string | null;
+            drawing_revision: string | null;
+            drawing_title: string | null;
+            destination_path: string | null;
+            created_at: string | null;
+            updated_at: string | null;
+        }>;
+    }> => {
+        const response = await api.get<ApiResponse<any>>(`/tenders/${tenderId}/batches/${batchId}/progress`);
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch batch progress');
+        }
+        return response.data.data;
+    },
+
+    retry: async (tenderId: string, batchId: string): Promise<void> => {
+        const response = await api.post<ApiResponse<{ message: string }>>(`/tenders/${tenderId}/batches/${batchId}/retry`);
+        if (!response.data.success) {
+            throw new Error(response.data.error || 'Failed to retry batch');
+        }
+    },
+
     updateStatus: async (tenderId: string, batchId: string, status: 'pending' | 'running' | 'completed' | 'failed'): Promise<Batch> => {
         const response = await api.patch<ApiResponse<Batch>>(`/tenders/${tenderId}/batches/${batchId}`, { status });
         if (!response.data.success || !response.data.data) {

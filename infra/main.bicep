@@ -36,6 +36,9 @@ param dataFabricApiUrl string = ''
 @description('Data Fabric API Key')
 param dataFabricApiKey string = ''
 
+@description('Batch progress polling interval in milliseconds (default: 30000 = 30 seconds)')
+param batchProgressPollingInterval string = '30000'
+
 @description('UiPath Tenant Name')
 param uipathTenantName string = ''
 
@@ -126,6 +129,8 @@ module aca 'aca.bicep' = {
     // Data Fabric configuration
     dataFabricApiUrl: dataFabricApiUrl
     dataFabricApiKey: dataFabricApiKey
+    // Batch progress polling configuration
+    batchProgressPollingInterval: batchProgressPollingInterval
   }
 }
 

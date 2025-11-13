@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { tendersApi, filesApi, configApi, batchesApi } from '../services/api';
-import { Tender, TenderFile, Batch, BatchWithFiles } from '../types';
+import { Tender, TenderFile } from '../types';
 import FileUploadZone from '../components/FileUploadZone';
 import SharePointFileBrowser from '../components/SharePointFileBrowser';
 import FileBrowser from '../components/FileBrowser';
 import FilePreview from '../components/FilePreview';
 import ExtractionModal from '../components/ExtractionModal';
-import FileBrowserTabs, { TabType } from '../components/FileBrowserTabs';
-import BatchList from '../components/BatchList';
-import BatchViewer from '../components/BatchViewer';
+import BatchesTab from '../components/BatchesTab';
 import Dialog from '../components/Dialog';
 import './TenderManagementPage.css';
+
+type MainTab = 'files' | 'batches';
 
 const TenderManagementPage: React.FC = () => {
   const { tenderId } = useParams<{ tenderId: string }>();
@@ -31,11 +31,8 @@ const TenderManagementPage: React.FC = () => {
     title: '' 
   });
 
-  // Batch state
-  const [activeTab, setActiveTab] = useState<TabType>('files');
-  const [batches, setBatches] = useState<Batch[]>([]);
-  const [selectedBatch, setSelectedBatch] = useState<BatchWithFiles | null>(null);
-  const [batchLoading, setBatchLoading] = useState(false);
+  // Main tab navigation
+  const [activeTab, setActiveTab] = useState<MainTab>('files');
 
   // Reload files when tab changes to ensure correct filtering
   useEffect(() => {
@@ -49,7 +46,6 @@ const TenderManagementPage: React.FC = () => {
     if (tenderId) {
       loadTender();
       loadFiles();
-      loadBatches();
     }
   }, [tenderId]);
 
@@ -92,37 +88,7 @@ const TenderManagementPage: React.FC = () => {
     }
   };
 
-  const loadBatches = async () => {
-    if (!tenderId) return;
-    try {
-      const data = await batchesApi.list(tenderId);
-      setBatches(data);
-    } catch (error) {
-      console.error('Failed to load batches:', error);
-    }
-  };
 
-  const handleBatchSelect = async (batchId: string) => {
-    if (!tenderId) return;
-    try {
-      setBatchLoading(true);
-      const data = await batchesApi.get(tenderId, batchId);
-      setSelectedBatch(data);
-    } catch (error) {
-      console.error('Failed to load batch:', error);
-      setAlertDialog({
-        show: true,
-        title: 'Error',
-        message: 'Failed to load batch details'
-      });
-    } finally {
-      setBatchLoading(false);
-    }
-  };
-
-  const handleCloseBatchViewer = () => {
-    setSelectedBatch(null);
-  };
 
   const handleFilesUploaded = async (uploadedFiles: File[]) => {
     if (!tenderId) return;
@@ -199,27 +165,40 @@ const TenderManagementPage: React.FC = () => {
       </header>
 
       <div className="page-content">
-        <div className="upload-section">
-          <FileUploadZone onFilesDropped={handleFilesUploaded} />
-          
-          {config?.sharepointBaseUrl && (
-            <SharePointFileBrowser
-              tenderId={tenderId!}
-              defaultSharePointPath={tender?.sharepoint_folder_path}
-              sharepointBaseUrl={config.sharepointBaseUrl}
-              onFilesImported={loadFiles}              
-            />
-          )}
-        </div>
-        
-        <div className="file-workspace">
-          <FileBrowserTabs
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            filesCount={activeFiles.length}
-            batchesCount={batches.length}
+        {/* Top-level tab navigation */}
+        <div className="main-tabs">
+          <button
+            className={`tab-button ${activeTab === 'files' ? 'active' : ''}`}
+            onClick={() => setActiveTab('files')}
           >
-            {activeTab === 'files' ? (
+            Files
+            {activeFiles.length > 0 && <span className="tab-badge">{activeFiles.length}</span>}
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'batches' ? 'active' : ''}`}
+            onClick={() => setActiveTab('batches')}
+          >
+            Batches
+          </button>
+        </div>
+
+        {/* Tab content */}
+        {activeTab === 'files' && (
+          <>
+            <div className="upload-section">
+              <FileUploadZone onFilesDropped={handleFilesUploaded} />
+              
+              {config?.sharepointBaseUrl && (
+                <SharePointFileBrowser
+                  tenderId={tenderId!}
+                  defaultSharePointPath={tender?.sharepoint_folder_path}
+                  sharepointBaseUrl={config.sharepointBaseUrl}
+                  onFilesImported={loadFiles}
+                />
+              )}
+            </div>
+            
+            <div className="file-workspace">
               <FileBrowser
                 files={activeFiles}
                 selectedFile={selectedFile}
@@ -229,27 +208,19 @@ const TenderManagementPage: React.FC = () => {
                 onFileDelete={handleFileDelete}
                 loading={loading}
               />
-            ) : selectedBatch ? (
-              <BatchViewer
-                batch={selectedBatch.batch}
-                files={selectedBatch.files}
-                tenderId={tenderId!}
-                onClose={handleCloseBatchViewer}
-                onFileSelect={handleFileSelect}
-                loading={batchLoading}
-              />
-            ) : (
-              <BatchList
-                batches={batches}
-                selectedBatchId={null}
-                onBatchSelect={handleBatchSelect}
-                loading={batchLoading}
-              />
-            )}
-          </FileBrowserTabs>
-          
-          <FilePreview file={selectedFile} tenderId={tenderId} />
-        </div>
+              
+              <FilePreview file={selectedFile} tenderId={tenderId} />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'batches' && tenderId && (
+          <BatchesTab
+            tenderId={tenderId}
+            onError={(message) => setAlertDialog({ show: true, title: 'Error', message })}
+            onReloadFiles={loadFiles}
+          />
+        )}
       </div>
 
       {showExtractionModal && tenderId && (
@@ -261,9 +232,8 @@ const TenderManagementPage: React.FC = () => {
           onSubmit={() => {
             setShowExtractionModal(false);
             
-            // Reload both files and batches
+            // Reload files
             loadFiles();
-            loadBatches();
             
             // Clear selection
             setSelectedFiles([]);

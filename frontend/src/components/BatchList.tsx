@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Batch } from '../types';
+import { batchesApi } from '../services/api';
 import './BatchList.css';
 
 interface BatchListProps {
@@ -7,6 +8,19 @@ interface BatchListProps {
     selectedBatchId: string | null;
     onBatchSelect: (batchId: string) => void;
     loading?: boolean;
+    tenderId: string;
+    onReload: () => void;
+}
+
+interface BatchProgress {
+    batch_id: string;
+    total_files: number;
+    status_counts: {
+        queued: number;
+        extracted: number;
+        failed: number;
+        exported: number;
+    };
 }
 
 const BatchList: React.FC<BatchListProps> = ({
@@ -14,7 +28,68 @@ const BatchList: React.FC<BatchListProps> = ({
     selectedBatchId,
     onBatchSelect,
     loading = false,
+    tenderId,
+    onReload,
 }) => {
+    const [batchProgress, setBatchProgress] = useState<Record<string, BatchProgress>>({});
+    const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    
+    // Get polling interval from environment or default to 30 seconds
+    const pollingInterval = parseInt(
+        (window as any).BATCH_PROGRESS_POLLING_INTERVAL || '30000',
+        10
+    );
+
+    // Poll for progress on running batches
+    useEffect(() => {
+        const runningBatches = batches.filter(b => b.status === 'running');
+        
+        if (runningBatches.length === 0) {
+            // Clear polling if no running batches
+            if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current);
+                pollingIntervalRef.current = null;
+            }
+            return;
+        }
+
+        const pollProgress = async () => {
+            for (const batch of runningBatches) {
+                try {
+                    const progress = await batchesApi.getProgress(tenderId, batch.batch_id);
+                    
+                    setBatchProgress(prev => ({
+                        ...prev,
+                        [batch.batch_id]: progress
+                    }));
+
+                    // Check if batch is complete (all files in terminal states)
+                    const { queued, extracted } = progress.status_counts;
+                    if (queued === 0 && extracted === 0) {
+                        // Batch is complete, reload list to update status
+                        onReload();
+                    }
+                } catch (error) {
+                    console.error(`Failed to poll progress for batch ${batch.batch_id}:`, error);
+                }
+            }
+        };
+
+        // Initial poll
+        pollProgress();
+
+        // Set up interval
+        pollingIntervalRef.current = setInterval(pollProgress, pollingInterval);
+
+        // Cleanup on unmount or when dependencies change
+        return () => {
+            if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current);
+                pollingIntervalRef.current = null;
+            }
+        };
+    }, [batches, tenderId, pollingInterval, onReload]);
+
     const getStatusBadgeClass = (status: string) => {
         switch (status) {
             case 'pending':
@@ -58,6 +133,42 @@ const BatchList: React.FC<BatchListProps> = ({
         );
     }
 
+    const renderProgressBar = (batch: Batch) => {
+        const progress = batchProgress[batch.batch_id];
+        if (!progress || batch.status !== 'running') {
+            return null;
+        }
+
+        const { exported, failed, extracted, queued } = progress.status_counts;
+        const total = progress.total_files;
+        const processed = exported + failed;
+        const percentComplete = total > 0 ? Math.round((processed / total) * 100) : 0;
+
+        return (
+            <div className="batch-progress">
+                <div className="progress-bar">
+                    <div 
+                        className="progress-fill progress-exported"
+                        style={{ width: `${(exported / total) * 100}%` }}
+                    />
+                    <div 
+                        className="progress-fill progress-failed"
+                        style={{ width: `${(failed / total) * 100}%` }}
+                    />
+                </div>
+                <div className="progress-stats">
+                    <span className="progress-text">{processed} of {total} processed ({percentComplete}%)</span>
+                    <div className="status-breakdown">
+                        {exported > 0 && <span className="stat-exported">✓ {exported}</span>}
+                        {extracted > 0 && <span className="stat-extracted">⏳ {extracted}</span>}
+                        {failed > 0 && <span className="stat-failed">✗ {failed}</span>}
+                        {queued > 0 && <span className="stat-queued">⋯ {queued}</span>}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="batch-list">
             {batches.map((batch) => (
@@ -95,6 +206,7 @@ const BatchList: React.FC<BatchListProps> = ({
                                 <span className="batch-info-value batch-job-id">{batch.job_id}</span>
                             </div>
                         )}
+                        {renderProgressBar(batch)}
                     </div>
                 </div>
             ))}

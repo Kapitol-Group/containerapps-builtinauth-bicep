@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Batch, TenderFile } from '../types';
+import { batchesApi } from '../services/api';
 import FileBrowser from './FileBrowser';
 import './BatchViewer.css';
 
@@ -10,6 +11,20 @@ interface BatchViewerProps {
     onClose: () => void;
     onFileSelect: (file: TenderFile) => void;
     loading?: boolean;
+    onError?: (message: string) => void;
+    onRetry?: () => void;
+    onDelete?: () => void;
+}
+
+interface FileProgress {
+    filename: string;
+    status: 'queued' | 'extracted' | 'failed' | 'exported';
+    drawing_number: string | null;
+    drawing_revision: string | null;
+    drawing_title: string | null;
+    destination_path: string | null;
+    created_at: string | null;
+    updated_at: string | null;
 }
 
 const BatchViewer: React.FC<BatchViewerProps> = ({
@@ -19,9 +34,60 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
     onClose,
     onFileSelect,
     loading = false,
+    onError,
+    onRetry,
+    onDelete,
 }) => {
     const [selectedFile, setSelectedFile] = useState<TenderFile | null>(null);
     const [retrying, setRetrying] = useState(false);
+    const [fileProgress, setFileProgress] = useState<FileProgress[]>([]);
+    const [loadingProgress, setLoadingProgress] = useState(false);
+    const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    
+    // Get polling interval from environment or default to 30 seconds
+    const pollingInterval = parseInt(
+        (window as any).BATCH_PROGRESS_POLLING_INTERVAL || '30000',
+        10
+    );
+
+    // Load and poll file progress for running batches
+    useEffect(() => {
+        const loadProgress = async () => {
+            if (!batch.uipath_reference) {
+                // Batch not yet submitted to UiPath
+                return;
+            }
+
+            try {
+                setLoadingProgress(true);
+                const progress = await batchesApi.getProgress(tenderId, batch.batch_id);
+                setFileProgress(progress.files);
+            } catch (error: any) {
+                console.error('Failed to load batch progress:', error);
+                if (onError) {
+                    onError('Failed to load batch progress');
+                }
+            } finally {
+                setLoadingProgress(false);
+            }
+        };
+
+        // Initial load
+        loadProgress();
+
+        // Poll if batch is running
+        if (batch.status === 'running') {
+            pollingIntervalRef.current = setInterval(loadProgress, pollingInterval);
+        }
+
+        // Cleanup
+        return () => {
+            if (pollingIntervalRef.current) {
+                clearInterval(pollingIntervalRef.current);
+                pollingIntervalRef.current = null;
+            }
+        };
+    }, [batch.batch_id, batch.status, batch.uipath_reference, tenderId, pollingInterval, onError]);
 
     const handleFileSelect = (file: TenderFile) => {
         setSelectedFile(file);
@@ -35,29 +101,58 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
 
         setRetrying(true);
         try {
-            const response = await fetch(
-                `/api/tenders/${tenderId}/batches/${batch.batch_id}/retry`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                }
-            );
-
-            const data = await response.json();
-
-            if (data.success) {
-                alert('Batch retry initiated. Processing in background.');
-                onClose(); // Return to batch list
-            } else {
-                alert(`Retry failed: ${data.error}`);
+            await batchesApi.retry(tenderId, batch.batch_id);
+            if (onRetry) {
+                onRetry();
             }
-        } catch (error) {
+            onClose(); // Return to batch list
+        } catch (error: any) {
             console.error('Error retrying batch:', error);
-            alert('Failed to retry batch. Please try again.');
+            if (onError) {
+                onError(error.message || 'Failed to retry batch. Please try again.');
+            }
         } finally {
             setRetrying(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!confirm('Are you sure you want to delete this batch? Files will remain categorized.')) {
+            return;
+        }
+
+        if (onDelete) {
+            onDelete();
+        }
+    };
+
+    const getStatusIcon = (status: string) => {
+        switch (status) {
+            case 'exported':
+                return '✓';
+            case 'extracted':
+                return '⏳';
+            case 'failed':
+                return '✗';
+            case 'queued':
+                return '⋯';
+            default:
+                return '?';
+        }
+    };
+
+    const getStatusClass = (status: string) => {
+        switch (status) {
+            case 'exported':
+                return 'file-status-exported';
+            case 'extracted':
+                return 'file-status-extracted';
+            case 'failed':
+                return 'file-status-failed';
+            case 'queued':
+                return 'file-status-queued';
+            default:
+                return '';
         }
     };
 
@@ -177,7 +272,47 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                 </div>
             )}
 
+            {/* File-level progress display */}
+            {fileProgress.length > 0 && (
+                <div className="file-progress-section">
+                    <h3>File Processing Status</h3>
+                    {loadingProgress && <p className="loading-indicator">Updating...</p>}
+                    <div className="file-progress-table">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Filename</th>
+                                    <th>Drawing Number</th>
+                                    <th>Revision</th>
+                                    <th>Title</th>
+                                    <th>Updated</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {fileProgress.map((file, index) => (
+                                    <tr key={index} className={getStatusClass(file.status)}>
+                                        <td className="status-cell">
+                                            <span className="status-icon">{getStatusIcon(file.status)}</span>
+                                            <span className="status-text">{file.status}</span>
+                                        </td>
+                                        <td className="filename-cell">{file.filename}</td>
+                                        <td>{file.drawing_number || '-'}</td>
+                                        <td>{file.drawing_revision || '-'}</td>
+                                        <td className="title-cell">{file.drawing_title || '-'}</td>
+                                        <td className="time-cell">
+                                            {file.updated_at ? formatDate(file.updated_at) : '-'}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
             <div className="batch-files-section">
+                <h3>Batch Files</h3>
                 <FileBrowser
                     files={files}
                     selectedFile={selectedFile}
@@ -189,6 +324,17 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                     readOnly={true}
                 />
             </div>
+
+            {canRetry && onDelete && (
+                <div className="batch-actions">
+                    <button
+                        className="delete-button"
+                        onClick={handleDelete}
+                    >
+                        🗑️ Delete Batch
+                    </button>
+                </div>
+            )}
         </div>
     );
 };

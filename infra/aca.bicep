@@ -26,6 +26,9 @@ param sharePointBaseUrl string = ''
 param dataFabricApiUrl string = ''
 param dataFabricApiKey string = ''
 
+// Batch progress polling configuration
+param batchProgressPollingInterval string = '30000'
+
 @description('Custom domain hostname (optional)')
 param customHostName string = ''
 
@@ -86,6 +89,10 @@ var baseEnvVars = [
   {
     name: 'DATA_FABRIC_API_URL'
     value: dataFabricApiUrl
+  }
+  {
+    name: 'BATCH_PROGRESS_POLLING_INTERVAL'
+    value: batchProgressPollingInterval
   }
 ]
 

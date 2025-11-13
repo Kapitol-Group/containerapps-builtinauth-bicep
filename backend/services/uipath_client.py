@@ -14,10 +14,14 @@ from entity_store_transformation_client.api.tender_project import (
     query_tender_project,
     add_tender_project
 )
-from entity_store_transformation_client.api.tender_submission import add_tender_submission
+from entity_store_transformation_client.api.tender_submission import (
+    add_tender_submission,
+    query_tender_submission
+)
 from entity_store_transformation_client.api.tender_file import (
     add_tender_file,
-    batch_delete_tender_file
+    batch_delete_tender_file,
+    query_tender_file
 )
 from entity_store_transformation_client.api.title_block_validation_users import (
     query_title_block_validation_users
@@ -821,3 +825,178 @@ class UiPathClient:
         except Exception as e:
             # Other errors - wrap with context
             raise Exception(f"Failed to submit extraction job: {str(e)}")
+
+    def _get_submission_by_reference(self, reference: str) -> TenderSubmission:
+        """
+        Query Entity Store for TenderSubmission by CUID reference
+
+        Args:
+            reference: CUID reference string
+
+        Returns:
+            TenderSubmission record
+
+        Raises:
+            Exception: If submission not found or query fails
+        """
+        # Ensure token is valid before proceeding
+        self._ensure_valid_token()
+
+        try:
+            print(f"Looking up TenderSubmission with Reference='{reference}'")
+
+            # Build query to find submission by reference
+            query_req = QueryRequest(
+                filter_group=QueryFilterGroup(
+                    query_filters=[
+                        QueryFilter(
+                            field_name="Reference",
+                            operator="=",
+                            value=reference
+                        )
+                    ]
+                ),
+                limit=1
+            )
+
+            # Execute query
+            response = query_tender_submission.sync(
+                client=self.entity_client,
+                body=query_req
+            )
+
+            # Check if submission exists
+            if response and response.value and len(response.value) > 0:
+                submission = response.value[0]
+                print(f"Found TenderSubmission: ID={submission.id}")
+                return submission
+
+            # Submission not found
+            raise Exception(
+                f"TenderSubmission with reference '{reference}' not found")
+
+        except Exception as e:
+            raise Exception(f"Failed to lookup TenderSubmission: {str(e)}")
+
+    def get_batch_progress(self, reference: str) -> Dict:
+        """
+        Query Entity Store for batch progress by CUID reference
+
+        Args:
+            reference: CUID reference linking batch to TenderSubmission
+
+        Returns:
+            Dictionary with progress data:
+            {
+                'total_files': int,
+                'status_counts': {
+                    'queued': int,
+                    'extracted': int,
+                    'failed': int,
+                    'exported': int
+                },
+                'files': [
+                    {
+                        'filename': str,
+                        'status': str,
+                        'drawing_number': str | None,
+                        'drawing_revision': str | None,
+                        'drawing_title': str | None,
+                        'destination_path': str | None,
+                        'created_at': str | None,
+                        'updated_at': str | None
+                    }
+                ]
+            }
+
+        Raises:
+            Exception: If query fails or submission not found
+        """
+        # Ensure token is valid before proceeding
+        self._ensure_valid_token()
+
+        try:
+            # Query TenderSubmission by reference
+            submission = self._get_submission_by_reference(reference)
+
+            print(
+                f"Querying TenderFiles for SubmissionId={submission.id}")
+
+            # Query TenderFiles by submission_id
+            # Use expansionLevel=1 to expand SubmissionId but not nested ProjectId
+            query_req = QueryRequest(
+                filter_group=QueryFilterGroup(
+                    query_filters=[
+                        QueryFilter(
+                            field_name="SubmissionId.Id",
+                            operator="=",
+                            value=str(submission.id)
+                        )
+                    ]
+                )
+            )
+
+            # Make direct HTTP request with expansionLevel=1 to expand SubmissionId but not ProjectId
+            from entity_store_transformation_client.api.tender_file.query_tender_file import _get_kwargs
+            import json
+
+            kwargs = _get_kwargs(body=query_req, expansion_level=1)
+            response = self.entity_client.get_httpx_client().request(**kwargs)
+
+            if response.status_code != 200:
+                raise Exception(
+                    f"Failed to query TenderFiles. Status: {response.status_code}, Response: {response.text}")
+
+            # Parse response manually
+            response_json = response.json()
+            files_data = response_json.get('value', [])
+
+            # Aggregate status counts
+            status_counts = {
+                'queued': 0,
+                'extracted': 0,
+                'failed': 0,
+                'exported': 0
+            }
+            file_details = []
+
+            if files_data:
+                for file_dict in files_data:
+                    # Map TenderProcessStatus enum to string
+                    status_value = file_dict.get(
+                        'Status', 1)  # Default to QUEUED
+                    status_key = {
+                        0: 'exported',  # EXPORTED
+                        1: 'queued',    # QUEUED
+                        2: 'extracted',  # EXTRACTED
+                        3: 'failed'     # FAILED
+                    }.get(status_value, 'queued')
+
+                    status_counts[status_key] += 1
+
+                    # Parse datetime strings if present
+                    created_at = file_dict.get('CreatedAt')
+                    updated_at = file_dict.get('UpdatedAt')
+
+                    file_details.append({
+                        'filename': file_dict.get('OriginalFilename', 'Unknown'),
+                        'status': status_key,
+                        'drawing_number': file_dict.get('DrawingNumber'),
+                        'drawing_revision': file_dict.get('DrawingRevision'),
+                        'drawing_title': file_dict.get('DrawingTitle'),
+                        'destination_path': file_dict.get('DestinationPath'),
+                        'created_at': created_at,
+                        'updated_at': updated_at
+                    })
+
+            print(
+                f"Found {len(file_details)} files. Status: {status_counts}")
+
+            return {
+                'total_files': len(file_details),
+                'status_counts': status_counts,
+                'files': file_details
+            }
+
+        except Exception as e:
+            raise Exception(f"Failed to get batch progress: {str(e)}")
