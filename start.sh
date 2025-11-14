@@ -15,8 +15,30 @@ touch /var/log/cron.log
     done
 } > /etc/environment
 
-# Start cron in the background
-cron
+# Debug: Show what we're setting up (output to both stdout and file)
+echo "=== Cron setup debug ==="
+echo "=== Cron setup debug ===" >> /var/log/cron.log
+echo "Date: $(date)"
+echo "Date: $(date)" >> /var/log/cron.log
+echo "Cron job file exists: $(test -f /etc/cron.d/mycron && echo 'YES' || echo 'NO')"
+echo "Cron job file exists: $(test -f /etc/cron.d/mycron && echo 'YES' || echo 'NO')" >> /var/log/cron.log
+if [ -f /etc/cron.d/mycron ]; then
+    echo "Cron job file content:"
+    cat /etc/cron.d/mycron
+    echo "Cron job file content:" >> /var/log/cron.log
+    cat /etc/cron.d/mycron >> /var/log/cron.log
+fi
+echo "Environment variables for cron:"
+cat /etc/environment
+echo "Environment variables for cron:" >> /var/log/cron.log
+cat /etc/environment >> /var/log/cron.log
+echo "=== Starting cron ==="
+echo "=== Starting cron ===" >> /var/log/cron.log
+
+# Start cron in the background with debug logging
+cron -L 15
+echo "Cron started with PID: $(pgrep cron)"
+echo "Cron started with PID: $(pgrep cron)" >> /var/log/cron.log
 
 # Start gunicorn as the main process
 exec gunicorn -c gunicorn.conf.py app:app

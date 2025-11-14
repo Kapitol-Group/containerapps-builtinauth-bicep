@@ -28,6 +28,7 @@ EXPOSE 50505
 
 COPY mycron /etc/cron.d/mycron
 RUN chmod 0644 /etc/cron.d/mycron
+RUN echo "Dockerfile: mycron copied and permissions set" && ls -la /etc/cron.d/mycron && cat /etc/cron.d/mycron
 
 COPY start.sh .
 RUN chmod +x start.sh
