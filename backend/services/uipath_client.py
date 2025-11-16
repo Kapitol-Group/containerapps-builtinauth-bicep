@@ -578,6 +578,7 @@ class UiPathClient:
                           reference: str,
                           document_count: int,
                           discipline: str,
+                          tender_file_id: str,
                           title_block_coords: Optional[Dict] = None,
                           sharepoint_folder_path: Optional[str] = None,
                           output_folder_path: Optional[str] = None) -> Dict:
@@ -591,6 +592,7 @@ class UiPathClient:
             reference: CUID linking to TenderSubmission
             document_count: Total files in this submission
             discipline: Drawing discipline (e.g., 'Architectural', 'Structural')
+            tender_file_id: TenderFile ID from Entity Store
             title_block_coords: Optional title block coordinates {x, y, width, height} in pixels
             sharepoint_folder_path: SharePoint folder path for input documents
             output_folder_path: SharePoint folder path for output location
@@ -620,12 +622,13 @@ class UiPathClient:
                 "Discipline": discipline,
                 "TitleBlockCoords": coords_str,  # String instead of object
                 "SharePointFolderPath": sharepoint_folder_path or "",
-                "OutputFolderPath": output_folder_path or ""
+                "OutputFolderPath": output_folder_path or "",
+                "TenderFileId": tender_file_id
             }
         }
 
         print(
-            f"Built queue item: File={file_path}, Discipline={discipline}, Ref={reference}, Coords={coords_str}")
+            f"Built queue item: File={file_path}, Discipline={discipline}, Ref={reference}, TenderFileId={tender_file_id}, Coords={coords_str}")
         return queue_item
 
     def _bulk_add_queue_items(self, queue_items: List[Dict]) -> Dict:
@@ -787,6 +790,7 @@ class UiPathClient:
                     reference=reference,
                     document_count=document_count,
                     discipline=discipline,
+                    tender_file_id=str(tender_file.id),
                     title_block_coords=title_block_coords,
                     sharepoint_folder_path=sharepoint_folder_path,
                     output_folder_path=output_folder_path
