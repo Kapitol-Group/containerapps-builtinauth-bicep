@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import re
 import os
 import asyncio
 from dotenv import load_dotenv
@@ -10,9 +11,21 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
 
+
+
 script_dir = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(script_dir, '.env')
+# Dynamically set dotenv path based on AZURE_ENV_NAME
+az_env = os.getenv("AZURE_ENV_NAME", "kap-scheduler-prod")
+dotenv_path = os.path.abspath(os.path.join(script_dir, f"../.azure/{az_env}/.env"))
+print(f"Loading .env file from: {dotenv_path}")
 load_dotenv(dotenv_path)
+
+
+# Print all available environment variables for debugging
+print("\n=== Available Environment Variables ===")
+for k, v in os.environ.items():
+    print(f"{k}={v}")
+print("=== End Environment Variables ===\n")
 
 # Authentication setup
 # Priority: Service Principal (explicit credentials) > Managed Identity > DefaultAzureCredential
@@ -50,10 +63,11 @@ async def fetch_field_values():
     async with CosmosClient(COSMOS_ENDPOINT, credential) as client:
         database = client.get_database_client(DATABASE_ID)
         container = database.get_container_client(CONTAINER_ID)
-        # Fetch id, session_id, entra_oid, and FIELD_NAME
-        query = f"SELECT c.id, c.session_id, c.entra_oid, c._ts, c.{FIELD_NAME} FROM c WHERE IS_DEFINED(c.{FIELD_NAME}) AND NOT IS_NULL(c.{FIELD_NAME}) AND IS_DEFINED(c.entra_oid) AND NOT IS_NULL(c.entra_oid)"
+        # Fetch id, session_id, entra_oid, _ts, FIELD_NAME and date (so we can preserve source date when present)
+        # Include items that have either the FIELD_NAME (question) or a date field present
+        query = f"SELECT c.id, c.session_id, c.entra_oid, c._ts, c.{FIELD_NAME}, c.date FROM c WHERE (IS_DEFINED(c.{FIELD_NAME}) OR IS_DEFINED(c.date)) AND IS_DEFINED(c.entra_oid) AND NOT IS_NULL(c.entra_oid)"
         items = container.query_items(query=query)
-        result = [item async for item in items if FIELD_NAME in item and 'entra_oid' in item and item['entra_oid']]
+        result = [item async for item in items if (FIELD_NAME in item or 'date' in item) and 'entra_oid' in item and item['entra_oid']]
         print(f"Fetched {len(result)} items from {CONTAINER_ID}")
         return result
 
@@ -77,9 +91,57 @@ def classify_texts(texts):
         return category_names[np.argmax(similarities)]
 
     df = pd.DataFrame(texts)
-    df['topic'] = df[FIELD_NAME].apply(classify)
-    df['date'] = df.apply(lambda x: datetime.fromtimestamp(x['_ts'], tz=timezone.utc), axis=1)
-    df['date'] = df['date'].astype('str')
+    # Ensure FIELD_NAME exists on all rows; fill missing with empty string
+    if FIELD_NAME not in df.columns:
+        df[FIELD_NAME] = ""
+    df[FIELD_NAME] = df[FIELD_NAME].fillna("")
+
+    # Classify only non-empty texts; for empty texts set topic to None
+    def classify_safe(text):
+        if not text:
+            return None
+        return classify(text)
+
+    df['topic'] = df[FIELD_NAME].apply(classify_safe)
+    # Set date field: use source date if present, else convert _ts
+    def get_date(row):
+        date_val = row.get('date')
+        # Use date field only if it exists and is not blank/null
+        if date_val is not None and str(date_val).strip() not in ('', 'None', 'null'):
+            # Always convert to yyyy-mm-dd format
+            dt = None
+            try:
+                dt = datetime.strptime(str(date_val), "%Y-%m-%d")
+            except Exception:
+                try:
+                    dt = datetime.strptime(str(date_val), "%d/%m/%Y")
+                except Exception:
+                    # Use pandas to coerce a wide range of formats; returns NaT on failure
+                    try:
+                        dt = pd.to_datetime(str(date_val), utc=True)
+                    except Exception:
+                        dt = None
+            # If pandas returned NaT or dt is None, fall back to using _ts below
+            if dt is not None and not pd.isna(dt):
+                # Normalize pandas Timestamp to python datetime if necessary
+                if isinstance(dt, pd.Timestamp):
+                    try:
+                        # convert to UTC then to python datetime
+                        if dt.tzinfo is not None or getattr(dt, 'tz', None) is not None:
+                            dt = dt.tz_convert('UTC').to_pydatetime()
+                        else:
+                            dt = dt.to_pydatetime()
+                    except Exception:
+                        dt = dt.to_pydatetime()
+                return dt.strftime('%Y-%m-%d')
+        # Otherwise, use _ts
+        dt = datetime.fromtimestamp(row['_ts'], tz=timezone.utc)
+        return dt.strftime('%Y-%m-%d')
+    df['date'] = df.apply(get_date, axis=1)
+    # Debug: print all dates being processed
+    print("\n=== Dates being processed ===")
+    print(df['date'].value_counts().sort_index())
+    print("=== End Dates ===\n")
     return df
 
 

@@ -9,15 +9,15 @@ load_dotenv()
 # Source Cosmos DB configuration
 SOURCE_COSMOSDB_ACCOUNT = "cosmos-ilzg75heuh4wm"
 SOURCE_DATABASE_NAME = "chat-database"
-SOURCE_CONTAINER_NAME = "chat-history-kapcoach"
+SOURCE_CONTAINER_NAME = "topic-history-kapcoach"
 
 # Destination Cosmos DB configuration
 DEST_COSMOSDB_ACCOUNT = "cosmos-ilzg75heuh4wm"
 DEST_DATABASE_NAME = "chat-database"
-DEST_CONTAINER_NAME = "chat-history-kapcoach-old"
+DEST_CONTAINER_NAME = "topic-history-kapcoach-old"
 
 # Partition key path (must be the same in both containers)
-PARTITION_KEY_PATHS = ["/entra_oid", "/session_id"]  # Hierarchical partition key
+PARTITION_KEY_PATH = "/session_id"  # Adjust to your actual partition key
 
 def migrate_partition_data():
     """
@@ -61,8 +61,8 @@ def migrate_partition_data():
     
     for idx, item in enumerate(items):
         try:
-            # Skip items with _ts equal to 1763438874 or 1763438875
-            if item.get('_ts') in [1763438874, 1763438875]:
+            # Only migrate if _ts is NOT 1763438874 or 1763438875 AND 'date' field does not exist
+            if (item.get('_ts') in [1763438874, 1763438875]) or ('date' in item):
                 continue
 
             # Upsert item (insert or update if exists)

@@ -1,44 +1,68 @@
 #!/bin/bash
-# Create log directory if it doesn't exist
+set -euo pipefail
+
+# Start script for Container Apps: supervise cron and gunicorn, forward signals,
+# and keep an ordered shutdown sequence so the managed environment can stop the
+# container cleanly.
+
+# Create log directory and cron log file
 mkdir -p /var/log
 touch /var/log/cron.log
+chmod 0666 /var/log/cron.log || true
 
-# Export environment variables for cron jobs
-# Properly escape values for shell sourcing by:
-# 1. Using double quotes around the value
-# 2. Escaping backslashes, double quotes, dollar signs, and backticks
+# Export selected environment variables for cron jobs into /etc/environment so
+# the cron job can source them. We only export AZURE_* variables to avoid
+# leaking secrets here. Values are safely quoted.
 {
     printenv | grep -E '^AZURE_' | while IFS='=' read -r name value; do
-        # Escape special characters that need escaping inside double quotes
+        # Escape backslashes and double quotes for safe double-quoted export
         escaped_value=$(printf '%s' "$value" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\$/\\$/g; s/`/\\`/g')
         printf 'export %s="%s"\n' "$name" "$escaped_value"
     done
 } > /etc/environment
 
-# Debug: Show what we're setting up (output to both stdout and file)
-echo "=== Cron setup debug ==="
-echo "=== Cron setup debug ===" >> /var/log/cron.log
-echo "Date: $(date)"
+echo "=== Cron start wrapper ==="
 echo "Date: $(date)" >> /var/log/cron.log
-echo "Cron job file exists: $(test -f /etc/cron.d/mycron && echo 'YES' || echo 'NO')"
 echo "Cron job file exists: $(test -f /etc/cron.d/mycron && echo 'YES' || echo 'NO')" >> /var/log/cron.log
 if [ -f /etc/cron.d/mycron ]; then
-    echo "Cron job file content:"
-    cat /etc/cron.d/mycron
-    echo "Cron job file content:" >> /var/log/cron.log
-    cat /etc/cron.d/mycron >> /var/log/cron.log
+    echo "Contents of /etc/cron.d/mycron:" >> /var/log/cron.log
+    sed -n '1,200p' /etc/cron.d/mycron >> /var/log/cron.log || true
 fi
-echo "Environment variables for cron:"
-cat /etc/environment
-echo "Environment variables for cron:" >> /var/log/cron.log
-cat /etc/environment >> /var/log/cron.log
-echo "=== Starting cron ==="
-echo "=== Starting cron ===" >> /var/log/cron.log
 
-# Start cron in the background with debug logging
-cron -L 15
-echo "Cron started with PID: $(pgrep cron)"
-echo "Cron started with PID: $(pgrep cron)" >> /var/log/cron.log
+# Start cron in foreground so we can manage it as a child process. Stream
+# cron output to both the cron log file and the container stdout (via tee)
+# so the Container Apps platform (which captures container stdout/stderr) will
+# include cron logs in the app logs.
+cron -f 2>&1 | tee -a /var/log/cron.log &
+CRON_PID=$!
+echo "cron pid=${CRON_PID}" >> /var/log/cron.log
 
-# Start gunicorn as the main process
-exec gunicorn -c gunicorn.conf.py app:app
+# Start gunicorn as the web process
+gunicorn -c gunicorn.conf.py app:app &
+GUNICORN_PID=$!
+echo "gunicorn pid=${GUNICORN_PID}" >> /var/log/cron.log
+
+# Define cleanup function to forward termination signals to child processes
+finish() {
+    echo "Received termination signal, shutting down..." >> /var/log/cron.log
+    for pid in "${GUNICORN_PID}" "${CRON_PID}"; do
+        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+            echo "Killing pid ${pid}" >> /var/log/cron.log
+            kill -TERM "${pid}" || true
+        fi
+    done
+    # wait for children to exit
+    wait || true
+    echo "Shutdown complete" >> /var/log/cron.log
+}
+
+trap finish SIGTERM SIGINT
+
+# Wait for the gunicorn process; if it exits, return its status (and stop cron)
+wait ${GUNICORN_PID}
+EXIT_STATUS=$?
+
+# If gunicorn exited, bring down cron as well
+finish || true
+
+exit ${EXIT_STATUS}
