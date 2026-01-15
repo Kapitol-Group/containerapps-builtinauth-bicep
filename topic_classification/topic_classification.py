@@ -81,6 +81,7 @@ def classify_texts(texts):
         "Productivity": "Improving focus, time management, meeting deadlines, working efficiently, Prioritise, optimise performance, effectiveness, personal efficiency.",
         "Personal & Career Growth": "Getting promoted, goals, mission, improving skills, mentorship, advancing in your career.",
         "Wellbeing": "Managing stress, work-life balance, mental health, self-care, relaxation techniques, mindfulness.",
+        "Other": "General topics not covered by other categories. For example: PMO requests, new business, finance, estimation"
     }
     category_names = list(categories.keys())
     category_embeddings = model.encode(list(categories.values()))
