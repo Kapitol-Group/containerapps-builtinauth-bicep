@@ -66,7 +66,7 @@ def classify_texts(texts):
         "Difficult Conversations": "Handling conflict, addressing issues, managing emotions, resolving disagreements, tough talks.",
         "Productivity": "Improving focus, time management, meeting deadlines, working efficiently, Prioritise, optimise performance, effectiveness, personal efficiency.",
         "Personal & Career Growth": "Getting promoted, goals, mission, improving skills, mentorship, advancing in your career.",
-        "Wellbeing": "Managing stress, work-life balance, mental health, self-care, relaxation techniques, mindfulness.",
+        "Wellbeing": "Managing stress, work-life balance, mental health, self-care, relaxation techniques, mindfulness, fatigue, energy and recovery, sleep, boundaries, recovery challenges, coping and regulation behaviours, emotional and cognitive load, resilience, healthy eating and anti-fatigue food access, hydration, movement and mini movement challenges, seasonal health, ergonomic support, social and cultural dynamics, belonging, help-seeking and trust, burnout prevention, sustainable performance.",
     }
     category_names = list(categories.keys())
     category_embeddings = model.encode(list(categories.values()))
@@ -76,10 +76,28 @@ def classify_texts(texts):
         similarities = cosine_similarity(text_embedding, category_embeddings)[0]
         return category_names[np.argmax(similarities)]
 
+    def convert_timestamp_to_date(ts):
+        """Convert Unix timestamp to ISO 8601 date string for Power BI compatibility."""
+        if ts is None or (isinstance(ts, float) and np.isnan(ts)):
+            return None  # Return None instead of empty string for missing dates
+        try:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+            # Return ISO 8601 format which Power BI recognizes as a date
+            return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        except (ValueError, TypeError, OSError) as e:
+            print(f"Warning: Could not convert timestamp {ts}: {e}")
+            return None
+
     df = pd.DataFrame(texts)
     df['topic'] = df[FIELD_NAME].apply(classify)
-    df['date'] = df.apply(lambda x: datetime.fromtimestamp(x['_ts'], tz=timezone.utc), axis=1)
-    df['date'] = df['date'].astype('str')
+    df['date'] = df['_ts'].apply(convert_timestamp_to_date)
+    
+    # Filter out records with None dates to prevent Power BI errors
+    invalid_dates = df['date'].isna().sum()
+    if invalid_dates > 0:
+        print(f"Warning: {invalid_dates} records have invalid/missing timestamps and will be excluded")
+        df = df.dropna(subset=['date'])
+    
     return df
 
 
