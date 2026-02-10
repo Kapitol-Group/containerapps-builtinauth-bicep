@@ -809,7 +809,8 @@ class BlobStorageService:
 
     def delete_batch(self, tender_id: str, batch_id: str) -> bool:
         """
-        Delete a batch (admin only - metadata blob only, files remain)
+        Delete a batch and clear batch_id from its associated files so
+        they reappear as uncategorized in the Active Files tab.
 
         Args:
             tender_id: Tender identifier
@@ -824,6 +825,36 @@ class BlobStorageService:
         batch_blob_name = f"{tender_id}/.batch_{batch_id}"
 
         try:
+            # First, retrieve batch metadata to get the associated file paths
+            batch = self.get_batch(tender_id, batch_id)
+            file_paths = batch.get('file_paths', []) if batch else []
+
+            # Clear batch_id from associated files so they become visible again
+            files_cleaned = 0
+            for file_path in file_paths:
+                try:
+                    file_blob = self.container_client.get_blob_client(
+                        file_path)
+                    properties = file_blob.get_blob_properties()
+                    metadata = dict(
+                        properties.metadata) if properties.metadata else {}
+
+                    if metadata.get('batch_id'):
+                        metadata.pop('batch_id', None)
+                        metadata.pop('submitted_at', None)
+                        # Reset category to uncategorized
+                        metadata['category'] = 'uncategorized'
+                        file_blob.set_blob_metadata(metadata)
+                        files_cleaned += 1
+                except Exception as file_err:
+                    logger.warning(
+                        f"Could not clear batch_id from file {file_path}: {file_err}")
+                    continue
+
+            logger.info(
+                f"Cleared batch_id from {files_cleaned}/{len(file_paths)} files")
+
+            # Delete the batch metadata blob
             blob_client = self.container_client.get_blob_client(
                 batch_blob_name)
             blob_client.delete_blob()

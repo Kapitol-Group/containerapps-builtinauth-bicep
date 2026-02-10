@@ -61,6 +61,22 @@ const BatchesTab: React.FC<BatchesTabProps> = ({ tenderId, onError, onReloadFile
         console.log('File selected:', file);
     };
 
+    const handleBatchDelete = () => {
+        // Optimistically remove the deleted batch so the list updates instantly
+        if (selectedBatchId) {
+            setBatches(prev => prev.filter(b => b.batch_id !== selectedBatchId));
+        }
+        // Clear selection to return to list view
+        setSelectedBatchId(null);
+        setSelectedBatchData(null);
+        // Reload files since batch files are now uncategorized
+        onReloadFiles();
+        // Silently refresh batch list in background (no loading indicator)
+        batchesApi.list(tenderId)
+            .then(fetched => setBatches(fetched))
+            .catch(() => {});
+    };
+
     return (
         <div className="batches-tab">
             {!selectedBatchId ? (
@@ -80,6 +96,7 @@ const BatchesTab: React.FC<BatchesTabProps> = ({ tenderId, onError, onReloadFile
                     onClose={handleBatchClose}
                     onFileSelect={handleFileSelect}
                     loading={loadingBatch}
+                    onDelete={handleBatchDelete}
                 />
             ) : (
                 <div className="loading-message">Loading batch...</div>

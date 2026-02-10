@@ -960,7 +960,7 @@ def delete_batch(tender_id: str, batch_id: str):
 
         return jsonify({
             'success': True,
-            'message': 'Batch deleted successfully. Files remain categorized.'
+            'message': 'Batch deleted successfully. Files have been uncategorized.'
         })
     except Exception as e:
         logger.error(

@@ -116,13 +116,26 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         }
     };
 
+    const [deleting, setDeleting] = useState(false);
+
     const handleDelete = async () => {
-        if (!confirm('Are you sure you want to delete this batch? Files will remain categorized.')) {
+        if (!confirm(`Are you sure you want to delete batch "${batch.batch_name}"? The batch record will be removed and its files will become uncategorized.`)) {
             return;
         }
 
-        if (onDelete) {
-            onDelete();
+        setDeleting(true);
+        try {
+            await batchesApi.delete(tenderId, batch.batch_id);
+            if (onDelete) {
+                onDelete();
+            }
+        } catch (error: any) {
+            console.error('Error deleting batch:', error);
+            if (onError) {
+                onError(error.message || 'Failed to delete batch. Please try again.');
+            }
+        } finally {
+            setDeleting(false);
         }
     };
 
@@ -325,13 +338,14 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                 />
             </div>
 
-            {canRetry && onDelete && (
+            {onDelete && (
                 <div className="batch-actions">
                     <button
                         className="delete-button"
                         onClick={handleDelete}
+                        disabled={deleting}
                     >
-                        🗑️ Delete Batch
+                        {deleting ? 'Deleting...' : '🗑️ Delete Batch'}
                     </button>
                 </div>
             )}
