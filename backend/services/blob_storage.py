@@ -16,6 +16,17 @@ from werkzeug.datastructures import FileStorage
 
 logger = logging.getLogger(__name__)
 
+# Azure Blob metadata has strict header-size limits.
+# Keep values conservative to prevent OutOfRangeInput errors on batch retries.
+MAX_BATCH_METADATA_TOTAL_CHARS = int(
+    os.getenv('BATCH_METADATA_TOTAL_MAX_CHARS', '7000'))
+MAX_BATCH_ERROR_CHARS = int(os.getenv('BATCH_METADATA_ERROR_MAX_CHARS', '512'))
+MAX_BATCH_ATTEMPTS = int(os.getenv('BATCH_METADATA_ATTEMPTS_MAX', '5'))
+MAX_BATCH_FOLDER_LIST_ITEMS = int(
+    os.getenv('BATCH_METADATA_FOLDER_LIST_MAX_ITEMS', '100'))
+MAX_BATCH_FOLDER_NAME_CHARS = int(
+    os.getenv('BATCH_METADATA_FOLDER_NAME_MAX_CHARS', '120'))
+
 
 def sanitize_metadata_value(value: str) -> str:
     """
@@ -53,6 +64,145 @@ def sanitize_metadata_dict(metadata: Dict) -> Dict:
         else:
             sanitized[key] = value
     return sanitized
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    """Truncate text for metadata fields while preserving validity."""
+    if value is None:
+        return ''
+    value = str(value)
+    if max_chars <= 0 or len(value) <= max_chars:
+        return value
+    if max_chars <= 3:
+        return value[:max_chars]
+    return value[:max_chars - 3] + '...'
+
+
+def _json_dumps_compact(value) -> str:
+    """Compact JSON to reduce metadata size pressure."""
+    return json.dumps(value, ensure_ascii=True, separators=(',', ':'))
+
+
+def _metadata_size_chars(metadata: Dict) -> int:
+    """
+    Approximate metadata size in characters.
+    Blob metadata is sent as headers, so value growth can trigger request limits.
+    """
+    total = 0
+    for key, value in metadata.items():
+        total += len(str(key))
+        total += len(str(value))
+    return total
+
+
+def _normalize_folder_list(folder_list: List) -> List[str]:
+    """Bound folder_list growth for metadata safety."""
+    if not isinstance(folder_list, list):
+        return []
+
+    normalized = []
+    for folder_name in folder_list[:MAX_BATCH_FOLDER_LIST_ITEMS]:
+        normalized.append(
+            _truncate_text(sanitize_metadata_value(str(folder_name)),
+                           MAX_BATCH_FOLDER_NAME_CHARS)
+        )
+    return normalized
+
+
+def _normalize_submission_attempts(attempts: List) -> List[Dict]:
+    """Keep a small, bounded submission history in metadata."""
+    if not isinstance(attempts, list):
+        return []
+
+    normalized = []
+    for attempt in attempts[-MAX_BATCH_ATTEMPTS:]:
+        if not isinstance(attempt, dict):
+            continue
+
+        normalized_attempt = {
+            'timestamp': _truncate_text(
+                sanitize_metadata_value(str(attempt.get('timestamp', ''))), 64),
+            'status': _truncate_text(
+                sanitize_metadata_value(str(attempt.get('status', ''))), 32)
+        }
+
+        if attempt.get('reference'):
+            normalized_attempt['reference'] = _truncate_text(
+                sanitize_metadata_value(str(attempt.get('reference'))), 128)
+
+        if attempt.get('error'):
+            normalized_attempt['error'] = _truncate_text(
+                sanitize_metadata_value(str(attempt.get('error'))),
+                MAX_BATCH_ERROR_CHARS
+            )
+
+        normalized.append(normalized_attempt)
+
+    return normalized
+
+
+def _enforce_batch_metadata_limits(metadata: Dict) -> Dict:
+    """
+    Enforce size limits for batch metadata updates to avoid Azure OutOfRangeInput.
+    """
+    safe = {}
+    for key, value in metadata.items():
+        if value is None:
+            safe[key] = ''
+        else:
+            safe[key] = sanitize_metadata_value(str(value))
+
+    # Normalize high-risk fields if they exist.
+    if 'last_error' in safe:
+        safe['last_error'] = _truncate_text(safe['last_error'],
+                                            MAX_BATCH_ERROR_CHARS)
+
+    if 'submission_attempts' in safe:
+        try:
+            attempts = json.loads(safe['submission_attempts'])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            attempts = []
+        safe['submission_attempts'] = _json_dumps_compact(
+            _normalize_submission_attempts(attempts))
+
+    if 'folder_list' in safe:
+        try:
+            folder_list = json.loads(safe['folder_list'])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            folder_list = []
+        safe['folder_list'] = _json_dumps_compact(
+            _normalize_folder_list(folder_list))
+
+    size = _metadata_size_chars(safe)
+    if size <= MAX_BATCH_METADATA_TOTAL_CHARS:
+        return safe
+
+    # Progressive degradation for non-critical batch history fields.
+    if 'submission_attempts' in safe:
+        safe['submission_attempts'] = _json_dumps_compact([])
+        size = _metadata_size_chars(safe)
+
+    if size > MAX_BATCH_METADATA_TOTAL_CHARS and 'folder_list' in safe:
+        safe['folder_list'] = _json_dumps_compact([])
+        size = _metadata_size_chars(safe)
+
+    if size > MAX_BATCH_METADATA_TOTAL_CHARS and 'last_error' in safe:
+        safe['last_error'] = _truncate_text(safe['last_error'], 128)
+        size = _metadata_size_chars(safe)
+
+    if size > MAX_BATCH_METADATA_TOTAL_CHARS and 'last_error' in safe:
+        safe['last_error'] = ''
+        size = _metadata_size_chars(safe)
+
+    if size > MAX_BATCH_METADATA_TOTAL_CHARS:
+        logger.warning(
+            "Batch metadata remains large after safety reductions "
+            "(size=%s, limit=%s).",
+            size,
+            MAX_BATCH_METADATA_TOTAL_CHARS
+        )
+
+    return safe
 
 
 class BlobStorageService:
@@ -543,15 +693,15 @@ class BlobStorageService:
             'batch_id': batch_id,
             'batch_name': sanitize_metadata_value(batch_name),
             'discipline': sanitize_metadata_value(discipline),
-            'file_paths': json.dumps(file_paths),
-            'title_block_coords': json.dumps(title_block_coords),
+            'file_paths': _json_dumps_compact(file_paths),
+            'title_block_coords': _json_dumps_compact(title_block_coords),
             'status': 'pending',
             'submitted_at': datetime.utcnow().isoformat(),
             'submitted_by': sanitize_metadata_value(submitted_by),
             'file_count': str(len(file_paths)),
             'job_id': sanitize_metadata_value(job_id) if job_id else '',
             # New fields for enhanced tracking
-            'submission_attempts': json.dumps([]),
+            'submission_attempts': _json_dumps_compact([]),
             'last_error': '',
             'uipath_reference': '',
             'uipath_submission_id': '',
@@ -559,8 +709,10 @@ class BlobStorageService:
             # SharePoint paths and folder list for retry support
             'sharepoint_folder_path': sanitize_metadata_value(sharepoint_folder_path) if sharepoint_folder_path else '',
             'output_folder_path': sanitize_metadata_value(output_folder_path) if output_folder_path else '',
-            'folder_list': json.dumps(folder_list) if folder_list else json.dumps([])
+            'folder_list': _json_dumps_compact(_normalize_folder_list(folder_list or []))
         }
+
+        batch_metadata = _enforce_batch_metadata_limits(batch_metadata)
 
         blob_client = self.container_client.get_blob_client(batch_blob_name)
         blob_client.upload_blob(
@@ -713,6 +865,7 @@ class BlobStorageService:
             # Update metadata (sanitize the status value)
             metadata = dict(properties.metadata)
             metadata['status'] = sanitize_metadata_value(status)
+            metadata = _enforce_batch_metadata_limits(metadata)
 
             blob_client.set_blob_metadata(metadata)
 
@@ -757,12 +910,36 @@ class BlobStorageService:
             for key, value in updates.items():
                 if value is None:
                     metadata[key] = ''
+                elif key == 'submission_attempts':
+                    metadata[key] = _json_dumps_compact(
+                        _normalize_submission_attempts(value if isinstance(value, list) else [])
+                    )
+                elif key == 'folder_list':
+                    if isinstance(value, list):
+                        folders = value
+                    elif isinstance(value, str):
+                        try:
+                            parsed = json.loads(value)
+                            folders = parsed if isinstance(parsed, list) else []
+                        except (ValueError, TypeError, json.JSONDecodeError):
+                            folders = []
+                    else:
+                        folders = []
+                    metadata[key] = _json_dumps_compact(
+                        _normalize_folder_list(folders))
+                elif key == 'last_error':
+                    metadata[key] = _truncate_text(
+                        sanitize_metadata_value(str(value)),
+                        MAX_BATCH_ERROR_CHARS
+                    )
                 elif isinstance(value, (list, dict)):
-                    metadata[key] = json.dumps(value)
+                    metadata[key] = _json_dumps_compact(value)
                 elif isinstance(value, (int, float)):
                     metadata[key] = str(value)
                 else:
                     metadata[key] = sanitize_metadata_value(str(value))
+
+            metadata = _enforce_batch_metadata_limits(metadata)
 
             # Write updated metadata
             blob_client.set_blob_metadata(metadata)

@@ -1,5 +1,15 @@
 import axios from 'axios';
-import { Tender, TenderFile, ExtractionJob, ApiResponse, TitleBlockCoords, Batch, BatchWithFiles } from '../types';
+import {
+    Tender,
+    TenderFile,
+    ExtractionJob,
+    ApiResponse,
+    TitleBlockCoords,
+    Batch,
+    BatchWithFiles,
+    BatchProgressSummaryResponse,
+    BatchStatusCounts,
+} from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || '/api';
 
@@ -264,12 +274,7 @@ export const batchesApi = {
     getProgress: async (tenderId: string, batchId: string): Promise<{
         batch_id: string;
         total_files: number;
-        status_counts: {
-            queued: number;
-            extracted: number;
-            failed: number;
-            exported: number;
-        };
+        status_counts: BatchStatusCounts;
         files: Array<{
             filename: string;
             status: 'queued' | 'extracted' | 'failed' | 'exported';
@@ -284,6 +289,20 @@ export const batchesApi = {
         const response = await api.get<ApiResponse<any>>(`/tenders/${tenderId}/batches/${batchId}/progress`);
         if (!response.data.success || !response.data.data) {
             throw new Error(response.data.error || 'Failed to fetch batch progress');
+        }
+        return response.data.data;
+    },
+
+    getProgressSummary: async (tenderId: string, batchIds: string[]): Promise<BatchProgressSummaryResponse> => {
+        if (batchIds.length === 0) {
+            return { progress_by_batch: {} };
+        }
+
+        const response = await api.get<ApiResponse<BatchProgressSummaryResponse>>(`/tenders/${tenderId}/batches/progress-summary`, {
+            params: { batch_ids: batchIds.join(',') },
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch batch progress summary');
         }
         return response.data.data;
     },

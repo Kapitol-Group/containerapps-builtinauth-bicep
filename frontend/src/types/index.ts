@@ -68,6 +68,24 @@ export interface BatchWithFiles {
     files: TenderFile[];
 }
 
+export interface BatchStatusCounts {
+    queued: number;
+    extracted: number;
+    failed: number;
+    exported: number;
+}
+
+export interface BatchProgressSummary {
+    batch_id: string;
+    total_files: number;
+    status_counts: BatchStatusCounts;
+}
+
+export interface BatchProgressSummaryResponse {
+    progress_by_batch: Record<string, BatchProgressSummary>;
+    errors_by_batch?: Record<string, string>;
+}
+
 export interface ExtractionJob {
     job_id: string;
     status: string;

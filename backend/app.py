@@ -81,6 +81,19 @@ chunked_uploads_lock = threading.Lock()
 # Auto-cleanup completed jobs after 1 hour
 JOB_CLEANUP_SECONDS = 3600
 
+# Keep stored batch error text compact to avoid blob metadata overflow.
+MAX_BATCH_ERROR_CHARS = int(os.getenv('BATCH_METADATA_ERROR_MAX_CHARS', '512'))
+
+
+def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
+    error_text = sanitize_metadata_value(str(error))
+    if prefix:
+        error_text = f"{prefix}{error_text}"
+    if len(error_text) <= MAX_BATCH_ERROR_CHARS:
+        return error_text
+    return error_text[:MAX_BATCH_ERROR_CHARS - 3] + '...'
+
+
 # Log startup info
 logger.info("=" * 60)
 logger.info("Construction Tender Automation Backend Starting")
@@ -297,12 +310,13 @@ def _process_uipath_submission_async(
             attempts = batch.get('submission_attempts', []) if batch else []
             if attempts:
                 attempts[-1]['status'] = 'failed'
-                attempts[-1]['error'] = str(user_error)
+                attempts[-1]['error'] = _compact_batch_error(user_error)
 
             blob_service.update_batch(tender_id, batch_id, {
                 'status': 'failed',
                 'submission_attempts': attempts,
-                'last_error': f'User validation failed: {str(user_error)}'
+                'last_error': _compact_batch_error(
+                    user_error, prefix='User validation failed: ')
             })
         except Exception as update_error:
             logger.error(
@@ -318,12 +332,12 @@ def _process_uipath_submission_async(
             attempts = batch.get('submission_attempts', []) if batch else []
             if attempts:
                 attempts[-1]['status'] = 'failed'
-                attempts[-1]['error'] = str(e)
+                attempts[-1]['error'] = _compact_batch_error(e)
 
             blob_service.update_batch(tender_id, batch_id, {
                 'status': 'failed',
                 'submission_attempts': attempts,
-                'last_error': str(e)
+                'last_error': _compact_batch_error(e)
             })
         except Exception as update_error:
             logger.error(
@@ -1238,6 +1252,136 @@ def list_batches(tender_id: str):
         }), 500
 
 
+@app.get('/api/tenders/<tender_id>/batches/progress-summary')
+@require_auth
+def get_batch_progress_summary(tender_id: str):
+    """
+    Get progress summary for multiple batches in one request.
+
+    Query params:
+    - batch_ids: comma-separated batch IDs
+
+    Returns:
+    {
+        "success": true,
+        "data": {
+            "progress_by_batch": {
+                "<batch_id>": {
+                    "batch_id": "<batch_id>",
+                    "total_files": 10,
+                    "status_counts": {
+                        "queued": 2,
+                        "extracted": 1,
+                        "failed": 0,
+                        "exported": 7
+                    }
+                }
+            },
+            "errors_by_batch": {
+                "<batch_id>": "Batch not found"
+            }
+        }
+    }
+    """
+    started_at = time.perf_counter()
+    try:
+        batch_ids_param = request.args.get('batch_ids', '').strip()
+        if not batch_ids_param:
+            return jsonify({
+                'success': False,
+                'error': 'batch_ids query parameter is required'
+            }), 400
+
+        seen = set()
+        batch_ids = []
+        for raw_batch_id in batch_ids_param.split(','):
+            batch_id = raw_batch_id.strip()
+            if batch_id and batch_id not in seen:
+                seen.add(batch_id)
+                batch_ids.append(batch_id)
+
+        if not batch_ids:
+            return jsonify({
+                'success': False,
+                'error': 'batch_ids must contain at least one batch id'
+            }), 400
+
+        logger.info(
+            f"Batch progress summary requested for tender {tender_id}: {len(batch_ids)} batches")
+
+        progress_by_batch = {}
+        errors_by_batch = {}
+
+        for batch_id in batch_ids:
+            try:
+                batch = blob_service.get_batch(tender_id, batch_id)
+                if not batch:
+                    errors_by_batch[batch_id] = 'Batch not found'
+                    continue
+
+                reference = batch.get('uipath_reference')
+                if not reference:
+                    file_count = int(batch.get('file_count', 0))
+                    progress_by_batch[batch_id] = {
+                        'batch_id': batch_id,
+                        'total_files': file_count,
+                        'status_counts': {
+                            'queued': file_count,
+                            'extracted': 0,
+                            'failed': 0,
+                            'exported': 0
+                        }
+                    }
+                    continue
+
+                progress = uipath_client.get_batch_progress(reference)
+                status_counts = progress.get('status_counts') or {}
+                progress_by_batch[batch_id] = {
+                    'batch_id': batch_id,
+                    'total_files': int(progress.get('total_files', 0)),
+                    'status_counts': {
+                        'queued': int(status_counts.get('queued', 0)),
+                        'extracted': int(status_counts.get('extracted', 0)),
+                        'failed': int(status_counts.get('failed', 0)),
+                        'exported': int(status_counts.get('exported', 0))
+                    }
+                }
+            except Exception as batch_error:
+                logger.error(
+                    f"Failed to get progress summary for batch {batch_id} in tender {tender_id}: {str(batch_error)}",
+                    exc_info=True
+                )
+                errors_by_batch[batch_id] = str(batch_error)
+
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.info(
+            f"Batch progress summary complete for tender {tender_id}: "
+            f"requested={len(batch_ids)} succeeded={len(progress_by_batch)} "
+            f"failed={len(errors_by_batch)} elapsed_ms={elapsed_ms}"
+        )
+
+        data = {
+            'progress_by_batch': progress_by_batch
+        }
+        if errors_by_batch:
+            data['errors_by_batch'] = errors_by_batch
+
+        return jsonify({
+            'success': True,
+            'data': data
+        })
+    except Exception as e:
+        elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+        logger.error(
+            f"Failed to get batch progress summary for tender {tender_id} after {elapsed_ms}ms: {str(e)}",
+            exc_info=True
+        )
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
 @app.get('/api/tenders/<tender_id>/batches/<batch_id>')
 @require_auth
 def get_batch(tender_id: str, batch_id: str):
@@ -1342,7 +1486,7 @@ def retry_batch(tender_id: str, batch_id: str):
 
         # Get batch details
         file_paths = batch.get('file_paths', [])
-        category = batch.get('category', '')
+        category = batch.get('discipline') or batch.get('category', '')
         title_block_coords = batch.get('title_block_coords', {})
         sharepoint_folder_path = batch.get('sharepoint_folder_path', '')
         output_folder_path = batch.get('output_folder_path', '')

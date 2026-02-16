@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Batch } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { Batch, BatchProgressSummary } from '../types';
 import { batchesApi } from '../services/api';
 import './BatchList.css';
 
@@ -12,17 +12,6 @@ interface BatchListProps {
     onReload: () => void;
 }
 
-interface BatchProgress {
-    batch_id: string;
-    total_files: number;
-    status_counts: {
-        queued: number;
-        extracted: number;
-        failed: number;
-        exported: number;
-    };
-}
-
 const BatchList: React.FC<BatchListProps> = ({
     batches,
     selectedBatchId,
@@ -31,8 +20,9 @@ const BatchList: React.FC<BatchListProps> = ({
     tenderId,
     onReload,
 }) => {
-    const [batchProgress, setBatchProgress] = useState<Record<string, BatchProgress>>({});
+    const [batchProgress, setBatchProgress] = useState<Record<string, BatchProgressSummary>>({});
     const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const pollInFlightRef = useRef(false);
     const onReloadRef = useRef(onReload);
     onReloadRef.current = onReload;
     
@@ -44,36 +34,69 @@ const BatchList: React.FC<BatchListProps> = ({
 
     // Poll for progress on running batches
     useEffect(() => {
-        const runningBatches = batches.filter(b => b.status === 'running');
-        
-        if (runningBatches.length === 0) {
+        const runningBatchIds = batches
+            .filter(batch => batch.status === 'running')
+            .map(batch => batch.batch_id);
+
+        if (runningBatchIds.length === 0) {
             // Clear polling if no running batches
             if (pollingIntervalRef.current) {
                 clearInterval(pollingIntervalRef.current);
                 pollingIntervalRef.current = null;
             }
+            pollInFlightRef.current = false;
             return;
         }
 
+        let isCancelled = false;
+
         const pollProgress = async () => {
-            for (const batch of runningBatches) {
-                try {
-                    const progress = await batchesApi.getProgress(tenderId, batch.batch_id);
-                    
+            if (isCancelled || pollInFlightRef.current) {
+                return;
+            }
+
+            pollInFlightRef.current = true;
+            try {
+                const summary = await batchesApi.getProgressSummary(tenderId, runningBatchIds);
+                if (isCancelled) {
+                    return;
+                }
+
+                const progressByBatch = summary.progress_by_batch || {};
+                if (Object.keys(progressByBatch).length > 0) {
                     setBatchProgress(prev => ({
                         ...prev,
-                        [batch.batch_id]: progress
+                        ...progressByBatch,
                     }));
+                }
 
-                    // Check if batch is complete (all files in terminal states)
+                let shouldReload = false;
+                for (const batchId of runningBatchIds) {
+                    const progress = progressByBatch[batchId];
+                    if (!progress) {
+                        continue;
+                    }
+
                     const { queued, extracted } = progress.status_counts;
                     if (queued === 0 && extracted === 0) {
-                        // Batch is complete, reload list to update status
-                        onReloadRef.current();
+                        shouldReload = true;
+                        break;
                     }
-                } catch (error) {
-                    console.error(`Failed to poll progress for batch ${batch.batch_id}:`, error);
                 }
+
+                if (shouldReload) {
+                    onReloadRef.current();
+                }
+
+                if (summary.errors_by_batch) {
+                    for (const [batchId, message] of Object.entries(summary.errors_by_batch)) {
+                        console.error(`Failed to poll progress summary for batch ${batchId}: ${message}`);
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to poll batch progress summary:', error);
+            } finally {
+                pollInFlightRef.current = false;
             }
         };
 
@@ -81,14 +104,19 @@ const BatchList: React.FC<BatchListProps> = ({
         pollProgress();
 
         // Set up interval
+        if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+        }
         pollingIntervalRef.current = setInterval(pollProgress, pollingInterval);
 
         // Cleanup on unmount or when dependencies change
         return () => {
+            isCancelled = true;
             if (pollingIntervalRef.current) {
                 clearInterval(pollingIntervalRef.current);
                 pollingIntervalRef.current = null;
             }
+            pollInFlightRef.current = false;
         };
     }, [batches, tenderId, pollingInterval]);
 
@@ -145,17 +173,19 @@ const BatchList: React.FC<BatchListProps> = ({
         const total = progress.total_files;
         const processed = exported + failed;
         const percentComplete = total > 0 ? Math.round((processed / total) * 100) : 0;
+        const exportedPercent = total > 0 ? (exported / total) * 100 : 0;
+        const failedPercent = total > 0 ? (failed / total) * 100 : 0;
 
         return (
             <div className="batch-progress">
                 <div className="progress-bar">
                     <div 
                         className="progress-fill progress-exported"
-                        style={{ width: `${(exported / total) * 100}%` }}
+                        style={{ width: `${exportedPercent}%` }}
                     />
                     <div 
                         className="progress-fill progress-failed"
-                        style={{ width: `${(failed / total) * 100}%` }}
+                        style={{ width: `${failedPercent}%` }}
                     />
                 </div>
                 <div className="progress-stats">
