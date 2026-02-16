@@ -1,0 +1,4 @@
+interface:
+  display_name: "Preprocess HAR Sessions"
+  short_description: "Extract and normalize HAR session logs"
+  default_prompt: "Use $preprocess-har-sessions to preprocess a HAR file and extract relevant sessions."
