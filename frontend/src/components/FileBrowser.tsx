@@ -9,6 +9,7 @@ interface FileBrowserProps {
   onFileSelect: (file: TenderFile) => void;
   onSelectionChange: (files: TenderFile[]) => void;
   onFileDelete?: (file: TenderFile) => void;
+  onBulkDelete?: (files: TenderFile[]) => void;
   loading: boolean;
   readOnly?: boolean;
 }
@@ -20,10 +21,12 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
   onFileSelect, 
   onSelectionChange, 
   onFileDelete,
+  onBulkDelete,
   loading,
   readOnly = false
 }) => {
   const [confirmDelete, setConfirmDelete] = useState<{ show: boolean; file: TenderFile | null }>({ show: false, file: null });
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const handleFileClick = (file: TenderFile, event: React.MouseEvent) => {
     // Set as preview file
     onFileSelect(file);
@@ -88,20 +91,49 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
     setConfirmDelete({ show: false, file: null });
   };
 
+  const handleDeleteSelectedClick = () => {
+    if (selectedFiles.length > 0) {
+      setConfirmBulkDelete(true);
+    }
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (onBulkDelete && selectedFiles.length > 0) {
+      onBulkDelete([...selectedFiles]);
+    }
+    setConfirmBulkDelete(false);
+  };
+
   return (
     <div className="file-browser">
       <div className="file-browser-header">
         <h3>Files ({files.length}) {readOnly && <span className="read-only-badge">(Read-Only)</span>}</h3>
         {files.length > 0 && !readOnly && (
-          <button 
-            className="select-all-btn"
-            onClick={handleSelectAll}
-            title={allSelected ? "Deselect all" : "Select all"}
-          >
-            {allSelected ? '☑ Deselect All' : '☐ Select All'}
-          </button>
+          <div className="file-browser-actions">
+            <button 
+              className="select-all-btn"
+              onClick={handleSelectAll}
+              title={allSelected ? "Deselect all" : "Select all"}
+            >
+              {allSelected ? '☑ Deselect All' : '☐ Select All'}
+            </button>
+            {onBulkDelete && selectedFiles.length > 0 && (
+              <button
+                className="delete-selected-btn"
+                onClick={handleDeleteSelectedClick}
+                title={`Delete ${selectedFiles.length} selected file(s)`}
+              >
+                🗑 Delete Selected ({selectedFiles.length})
+              </button>
+            )}
+          </div>
         )}
       </div>
+      {files.length > 0 && !readOnly && (
+        <div className="multi-select-hint">
+          Tip: Shift+click for range select, Ctrl/⌘+click to toggle individual files
+        </div>
+      )}
       {loading ? <p>Loading...</p> : (
         <div className="file-list">
           {files.map(file => (
@@ -145,6 +177,17 @@ const FileBrowser: React.FC<FileBrowserProps> = ({
         onConfirm={handleConfirmDelete}
         onCancel={() => setConfirmDelete({ show: false, file: null })}
         confirmText="Delete"
+        cancelText="Cancel"
+      />
+
+      <Dialog
+        isOpen={confirmBulkDelete}
+        title="Delete Selected Files"
+        message={`Are you sure you want to delete ${selectedFiles.length} selected file(s)? This action cannot be undone.`}
+        type="confirm"
+        onConfirm={handleConfirmBulkDelete}
+        onCancel={() => setConfirmBulkDelete(false)}
+        confirmText={`Delete ${selectedFiles.length} File(s)`}
         cancelText="Cancel"
       />
     </div>

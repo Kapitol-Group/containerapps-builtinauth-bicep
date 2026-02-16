@@ -4,23 +4,29 @@ import './FileUploadZone.css';
 
 interface FileUploadZoneProps {
   onFilesDropped: (files: File[]) => void;
+  disabled?: boolean;
 }
 
-const FileUploadZone: React.FC<FileUploadZoneProps> = ({ onFilesDropped }) => {
+const FileUploadZone: React.FC<FileUploadZoneProps> = ({ onFilesDropped, disabled = false }) => {
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    onFilesDropped(acceptedFiles);
-  }, [onFilesDropped]);
+    if (!disabled) {
+      onFilesDropped(acceptedFiles);
+    }
+  }, [onFilesDropped, disabled]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    multiple: true
+    multiple: true,
+    disabled,
   });
 
   return (
-    <div {...getRootProps()} className={`upload-zone ${isDragActive ? 'active' : ''}`}>
+    <div {...getRootProps()} className={`upload-zone ${isDragActive ? 'active' : ''} ${disabled ? 'disabled' : ''}`}>
       <input {...getInputProps()} />
       <div className="upload-content">
-        {isDragActive ? (
+        {disabled ? (
+          <p>Upload in progress...</p>
+        ) : isDragActive ? (
           <p>Drop files here...</p>
         ) : (
           <>

@@ -1,6 +1,7 @@
 """
 Azure Blob Storage service for managing tender documents
 """
+import base64
 import logging
 import os
 import uuid
@@ -9,7 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from io import BytesIO
 
-from azure.storage.blob import BlobServiceClient, ContainerClient, ContentSettings
+from azure.storage.blob import BlobServiceClient, BlobBlock, ContainerClient, ContentSettings
 from azure.identity import DefaultAzureCredential
 from werkzeug.datastructures import FileStorage
 
@@ -379,6 +380,63 @@ class BlobStorageService:
             'category': category,
             'source': source,
             **file_metadata
+        }
+
+    def stage_chunk(self, blob_name: str, chunk_index: int, data: bytes) -> str:
+        """
+        Stage a single block (chunk) for a blob.
+
+        Args:
+            blob_name: Full blob path (tender_id/category/filename)
+            chunk_index: Zero-based chunk index
+            data: Raw chunk bytes
+
+        Returns:
+            block_id string (base64-encoded)
+        """
+        if not self.container_client:
+            raise Exception("Blob storage not configured")
+
+        blob_client = self.container_client.get_blob_client(blob_name)
+        # Generate a deterministic block ID from chunk index (padded, base64 encoded)
+        block_id = base64.b64encode(
+            f"block-{chunk_index:06d}".encode()).decode()
+
+        blob_client.stage_block(block_id=block_id, data=data)
+        logger.info(f"Staged block {chunk_index} for {blob_name}")
+        return block_id
+
+    def commit_chunks(self, blob_name: str, block_ids: List[str],
+                      content_type: str, metadata: Dict) -> Dict:
+        """
+        Commit staged blocks to finalize a chunked upload.
+
+        Args:
+            blob_name: Full blob path
+            block_ids: Ordered list of block ID strings
+            content_type: MIME type for the blob
+            metadata: Blob metadata dict
+
+        Returns:
+            Basic info dict
+        """
+        if not self.container_client:
+            raise Exception("Blob storage not configured")
+
+        blob_client = self.container_client.get_blob_client(blob_name)
+        block_list = [BlobBlock(block_id=bid)
+                      for bid in block_ids if bid is not None]
+
+        blob_client.commit_block_list(
+            block_list,
+            content_settings=ContentSettings(content_type=content_type),
+            metadata=sanitize_metadata_dict(metadata),
+        )
+        logger.info(f"Committed {len(block_list)} blocks for {blob_name}")
+
+        return {
+            'path': blob_name,
+            'content_type': content_type,
         }
 
     def download_file(self, tender_id: str, file_path: str) -> Dict:

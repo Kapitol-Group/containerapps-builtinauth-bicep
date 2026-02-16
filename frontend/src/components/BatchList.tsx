@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Batch } from '../types';
 import { batchesApi } from '../services/api';
 import './BatchList.css';
@@ -33,6 +33,8 @@ const BatchList: React.FC<BatchListProps> = ({
 }) => {
     const [batchProgress, setBatchProgress] = useState<Record<string, BatchProgress>>({});
     const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const onReloadRef = useRef(onReload);
+    onReloadRef.current = onReload;
     
     // Get polling interval from environment or default to 30 seconds
     const pollingInterval = parseInt(
@@ -67,7 +69,7 @@ const BatchList: React.FC<BatchListProps> = ({
                     const { queued, extracted } = progress.status_counts;
                     if (queued === 0 && extracted === 0) {
                         // Batch is complete, reload list to update status
-                        onReload();
+                        onReloadRef.current();
                     }
                 } catch (error) {
                     console.error(`Failed to poll progress for batch ${batch.batch_id}:`, error);
@@ -88,7 +90,7 @@ const BatchList: React.FC<BatchListProps> = ({
                 pollingIntervalRef.current = null;
             }
         };
-    }, [batches, tenderId, pollingInterval, onReload]);
+    }, [batches, tenderId, pollingInterval]);
 
     const getStatusBadgeClass = (status: string) => {
         switch (status) {

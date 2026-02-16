@@ -1,0 +1,168 @@
+.upload-progress-panel {
+    background: var(--background-primary, #f6f8fa);
+    border: 1px solid var(--border-color, #d0d7de);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    animation: slideDown 0.2s ease-out;
+}
+
+.upload-progress-panel--done {
+    border-color: var(--border-color, #d0d7de);
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.upload-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.upload-progress-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-primary, #24292f);
+}
+
+.upload-progress-pct {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary, #656d76);
+    min-width: 36px;
+    text-align: right;
+}
+
+.upload-progress-track {
+    background: var(--border-color, #d0d7de);
+    border-radius: 4px;
+    height: 8px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.progress-fill {
+    background: var(--secondary-color, #2da44e);
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.progress-fill--warning {
+    background: #d1242f;
+}
+
+.progress-fill--cancelled {
+    background: #bf8700;
+}
+
+.upload-progress-current {
+    font-size: 0.775rem;
+    color: var(--text-secondary, #656d76);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+}
+
+.upload-progress-bytes {
+    font-size: 0.75rem;
+    color: var(--text-secondary, #656d76);
+    margin-bottom: 4px;
+}
+
+.upload-progress-errors {
+    margin-top: 8px;
+    font-size: 0.8rem;
+}
+
+.upload-progress-errors summary {
+    cursor: pointer;
+    color: #d1242f;
+    font-weight: 500;
+}
+
+.upload-progress-errors ul {
+    list-style: none;
+    padding: 4px 0 0 12px;
+    margin: 4px 0 0 0;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.upload-progress-errors li {
+    padding: 2px 0;
+    font-size: 0.775rem;
+    color: var(--text-primary, #24292f);
+}
+
+.error-filename {
+    font-weight: 500;
+}
+
+.error-msg {
+    color: var(--text-secondary, #656d76);
+}
+
+.error-more {
+    font-style: italic;
+    color: var(--text-secondary, #656d76);
+}
+
+.upload-progress-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.btn-sm {
+    padding: 4px 12px;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.15s ease;
+}
+
+.btn-sm.btn-primary {
+    background: var(--secondary-color, #2da44e);
+    color: white;
+    border-color: var(--secondary-color, #2da44e);
+}
+
+.btn-sm.btn-primary:hover {
+    opacity: 0.9;
+}
+
+.btn-sm.btn-secondary {
+    background: var(--background-primary, #f6f8fa);
+    color: var(--text-primary, #24292f);
+    border-color: var(--border-color, #d0d7de);
+}
+
+.btn-sm.btn-secondary:hover {
+    background: var(--border-color, #d0d7de);
+}
+
+.btn-sm.btn-danger {
+    background: transparent;
+    color: #d1242f;
+    border-color: #d1242f;
+}
+
+.btn-sm.btn-danger:hover {
+    background: #d1242f;
+    color: white;
+}

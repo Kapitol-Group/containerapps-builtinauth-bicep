@@ -14,7 +14,7 @@ from flask_cors import CORS
 from werkzeug.datastructures import FileStorage
 import requests
 
-from services.blob_storage import BlobStorageService
+from services.blob_storage import BlobStorageService, sanitize_metadata_value
 from services.uipath_client import UiPathClient
 from utils.auth import extract_user_info, require_auth
 
@@ -43,6 +43,9 @@ app = Flask(
     static_url_path=''
 )
 
+# Limit max upload body to 500MB
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024
+
 # CORS not needed since frontend and backend are on same origin
 # CORS(app, origins=[os.getenv('FRONTEND_URL', '*')])
 
@@ -66,6 +69,14 @@ uipath_client = UiPathClient(
 # SharePoint import job tracking (in-memory)
 sharepoint_import_jobs = {}
 import_jobs_lock = threading.Lock()
+
+# Bulk upload job tracking (in-memory)
+bulk_upload_jobs = {}
+bulk_upload_jobs_lock = threading.Lock()
+
+# Chunked upload tracking (in-memory)
+chunked_uploads = {}
+chunked_uploads_lock = threading.Lock()
 
 # Auto-cleanup completed jobs after 1 hour
 JOB_CLEANUP_SECONDS = 3600
@@ -624,6 +635,445 @@ def upload_file(tender_id: str):
             'success': False,
             'error': str(e)
         }), 500
+
+
+# ---- Bulk Upload Endpoints ----
+
+
+@app.post('/api/tenders/<tender_id>/files/bulk')
+@require_auth
+def bulk_upload_files(tender_id: str):
+    """Accept multiple files in one request and process them in a background thread"""
+    try:
+        files = request.files.getlist('files')
+        category = request.form.get('category', 'uncategorized')
+
+        if not files:
+            return jsonify({
+                'success': False,
+                'error': 'No files provided'
+            }), 400
+
+        # Verify tender exists
+        tender = blob_service.get_tender(tender_id)
+        if not tender:
+            return jsonify({
+                'success': False,
+                'error': 'Tender not found'
+            }), 404
+
+        user_info = extract_user_info(request.headers)
+
+        # Buffer all file data into memory (request.files won't survive past the request)
+        file_items = []
+        for f in files:
+            data = BytesIO(f.read())
+            file_items.append({
+                'data': data,
+                'filename': f.filename,
+                'content_type': f.content_type or 'application/octet-stream',
+            })
+
+        job_id = str(uuid.uuid4())
+
+        with bulk_upload_jobs_lock:
+            bulk_upload_jobs[job_id] = {
+                'job_id': job_id,
+                'tender_id': tender_id,
+                'status': 'running',
+                'progress': 0,
+                'total': len(file_items),
+                'current_file': '',
+                'success_count': 0,
+                'error_count': 0,
+                'errors': [],
+                'cancelled': False,
+                'created_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.utcnow().isoformat(),
+            }
+
+        t = threading.Thread(
+            target=_process_bulk_upload,
+            args=(job_id, tender_id, file_items, category, user_info),
+            daemon=True,
+        )
+        t.start()
+
+        logger.info(
+            f"Started bulk upload job {job_id} for tender {tender_id} with {len(file_items)} files")
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'job_id': job_id,
+                'total_files': len(file_items),
+            }
+        }), 202
+
+    except Exception as e:
+        logger.error(
+            f"Failed to start bulk upload: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.get('/api/tenders/<tender_id>/files/bulk-jobs/<job_id>')
+@require_auth
+def get_bulk_upload_job_status(tender_id: str, job_id: str):
+    """Get status of a bulk upload job"""
+    try:
+        with bulk_upload_jobs_lock:
+            job = bulk_upload_jobs.get(job_id)
+
+        if not job:
+            return jsonify({'success': False, 'error': 'Job not found'}), 404
+
+        # Don't expose internal fields
+        safe_job = {k: v for k, v in job.items() if k != 'cancelled'}
+        return jsonify({'success': True, 'data': safe_job})
+    except Exception as e:
+        logger.error(
+            f"Failed to get bulk job status: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/api/tenders/<tender_id>/files/bulk-jobs/<job_id>/cancel')
+@require_auth
+def cancel_bulk_upload_job(tender_id: str, job_id: str):
+    """Cancel a running bulk upload job"""
+    try:
+        with bulk_upload_jobs_lock:
+            job = bulk_upload_jobs.get(job_id)
+            if not job:
+                return jsonify({'success': False, 'error': 'Job not found'}), 404
+            job['cancelled'] = True
+            job['updated_at'] = datetime.utcnow().isoformat()
+
+        return jsonify({'success': True, 'data': {'message': 'Cancellation requested'}})
+    except Exception as e:
+        logger.error(
+            f"Failed to cancel bulk job: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _process_bulk_upload(job_id: str, tender_id: str, file_items: list,
+                         category: str, user_info: dict):
+    """Background thread to process bulk file uploads"""
+    try:
+        for i, item in enumerate(file_items):
+            # Check for cancellation
+            with bulk_upload_jobs_lock:
+                job = bulk_upload_jobs.get(job_id, {})
+                if job.get('cancelled'):
+                    job['status'] = 'cancelled'
+                    job['updated_at'] = datetime.utcnow().isoformat()
+                    logger.info(
+                        f"Bulk upload job {job_id} cancelled at file {i}/{len(file_items)}")
+                    _schedule_job_cleanup(job_id, 'bulk')
+                    return
+
+            file_name = item['filename']
+            with bulk_upload_jobs_lock:
+                if job_id in bulk_upload_jobs:
+                    bulk_upload_jobs[job_id]['current_file'] = file_name
+                    bulk_upload_jobs[job_id]['progress'] = i
+                    bulk_upload_jobs[job_id]['updated_at'] = datetime.utcnow(
+                    ).isoformat()
+
+            try:
+                file_storage = FileStorage(
+                    stream=item['data'],
+                    filename=file_name,
+                    content_type=item['content_type'],
+                )
+                blob_service.upload_file(
+                    tender_id=tender_id,
+                    file=file_storage,
+                    category=category,
+                    uploaded_by=user_info.get('name', 'Unknown'),
+                    source='local',
+                )
+                with bulk_upload_jobs_lock:
+                    if job_id in bulk_upload_jobs:
+                        bulk_upload_jobs[job_id]['success_count'] += 1
+                logger.info(
+                    f"Bulk upload: uploaded {file_name} ({i+1}/{len(file_items)}) job {job_id}")
+            except Exception as item_err:
+                error_msg = f"{file_name}: {str(item_err)}"
+                logger.error(
+                    f"Bulk upload failed for {file_name} in job {job_id}: {str(item_err)}")
+                with bulk_upload_jobs_lock:
+                    if job_id in bulk_upload_jobs:
+                        bulk_upload_jobs[job_id]['error_count'] += 1
+                        bulk_upload_jobs[job_id]['errors'].append(error_msg)
+
+        # Complete
+        with bulk_upload_jobs_lock:
+            if job_id in bulk_upload_jobs:
+                job = bulk_upload_jobs[job_id]
+                job['status'] = 'completed' if job[
+                    'error_count'] == 0 else 'completed_with_errors'
+                job['progress'] = len(file_items)
+                job['current_file'] = ''
+                job['updated_at'] = datetime.utcnow().isoformat()
+                job['completed_at'] = datetime.utcnow().isoformat()
+
+        logger.info(
+            f"Bulk upload job {job_id} completed: "
+            f"{bulk_upload_jobs[job_id]['success_count']} ok, "
+            f"{bulk_upload_jobs[job_id]['error_count']} failed")
+        _schedule_job_cleanup(job_id, 'bulk')
+
+    except Exception as e:
+        logger.error(
+            f"Fatal error in bulk upload job {job_id}: {str(e)}", exc_info=True)
+        with bulk_upload_jobs_lock:
+            if job_id in bulk_upload_jobs:
+                bulk_upload_jobs[job_id]['status'] = 'failed'
+                bulk_upload_jobs[job_id]['errors'].append(f"Fatal: {str(e)}")
+                bulk_upload_jobs[job_id]['updated_at'] = datetime.utcnow(
+                ).isoformat()
+        _schedule_job_cleanup(job_id, 'bulk')
+
+
+# ---- Chunked Upload Endpoints ----
+
+CHUNK_SIZE = 5 * 1024 * 1024  # 5 MB
+
+
+@app.post('/api/tenders/<tender_id>/uploads/init')
+@require_auth
+def init_chunked_upload(tender_id: str):
+    """Initialize a chunked upload for a large file"""
+    try:
+        data = request.json
+        filename = data.get('filename')
+        size = data.get('size', 0)
+        category = data.get('category', 'uncategorized')
+        content_type = data.get('content_type', 'application/octet-stream')
+
+        if not filename or size <= 0:
+            return jsonify({
+                'success': False,
+                'error': 'filename and size are required'
+            }), 400
+
+        # Verify tender exists
+        tender = blob_service.get_tender(tender_id)
+        if not tender:
+            return jsonify({'success': False, 'error': 'Tender not found'}), 404
+
+        upload_id = str(uuid.uuid4())
+        total_chunks = -(-size // CHUNK_SIZE)  # ceil division
+
+        user_info = extract_user_info(request.headers)
+
+        with chunked_uploads_lock:
+            chunked_uploads[upload_id] = {
+                'upload_id': upload_id,
+                'tender_id': tender_id,
+                'filename': filename,
+                'size': size,
+                'category': category,
+                'content_type': content_type,
+                'total_chunks': total_chunks,
+                'completed_chunks': set(),
+                'block_ids': [None] * total_chunks,
+                'uploaded_by': user_info.get('name', 'Unknown'),
+                'created_at': datetime.utcnow().isoformat(),
+            }
+
+        logger.info(
+            f"Initialized chunked upload {upload_id}: "
+            f"{filename} ({size} bytes, {total_chunks} chunks)")
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'upload_id': upload_id,
+                'chunk_size': CHUNK_SIZE,
+                'total_chunks': total_chunks,
+            }
+        })
+    except Exception as e:
+        logger.error(
+            f"Failed to init chunked upload: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.put('/api/tenders/<tender_id>/uploads/<upload_id>/chunks/<int:chunk_index>')
+@require_auth
+def upload_chunk(tender_id: str, upload_id: str, chunk_index: int):
+    """Upload a single chunk of a file"""
+    try:
+        with chunked_uploads_lock:
+            upload = chunked_uploads.get(upload_id)
+            if not upload:
+                return jsonify({
+                    'success': False,
+                    'error': 'Upload not found'
+                }), 404
+
+        if chunk_index < 0 or chunk_index >= upload['total_chunks']:
+            return jsonify({
+                'success': False,
+                'error': 'Invalid chunk index'
+            }), 400
+
+        chunk_data = request.get_data()
+        if not chunk_data:
+            return jsonify({'success': False, 'error': 'No chunk data'}), 400
+
+        # Stage block in Azure Blob Storage
+        blob_name = f"{tender_id}/{upload['category']}/{upload['filename']}"
+        block_id = blob_service.stage_chunk(
+            blob_name=blob_name,
+            chunk_index=chunk_index,
+            data=chunk_data,
+        )
+
+        with chunked_uploads_lock:
+            if upload_id in chunked_uploads:
+                chunked_uploads[upload_id]['completed_chunks'].add(chunk_index)
+                chunked_uploads[upload_id]['block_ids'][chunk_index] = block_id
+
+        return jsonify({'success': True, 'data': {'chunk_index': chunk_index}})
+    except Exception as e:
+        logger.error(
+            f"Failed to upload chunk {chunk_index} for {upload_id}: {str(e)}",
+            exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.post('/api/tenders/<tender_id>/uploads/<upload_id>/complete')
+@require_auth
+def complete_chunked_upload(tender_id: str, upload_id: str):
+    """Finalize a chunked upload by committing all blocks"""
+    try:
+        with chunked_uploads_lock:
+            upload = chunked_uploads.get(upload_id)
+            if not upload:
+                return jsonify({
+                    'success': False,
+                    'error': 'Upload not found'
+                }), 404
+
+        # Verify all chunks are present
+        if len(upload['completed_chunks']) < upload['total_chunks']:
+            missing = set(range(upload['total_chunks'])
+                          ) - upload['completed_chunks']
+            return jsonify({
+                'success': False,
+                'error': f"Missing chunks: {sorted(missing)}"
+            }), 400
+
+        # Commit block list
+        blob_name = f"{tender_id}/{upload['category']}/{upload['filename']}"
+        block_ids = upload['block_ids']
+
+        metadata = {
+            'category': sanitize_metadata_value(upload['category']),
+            'uploaded_by': sanitize_metadata_value(upload['uploaded_by']),
+            'uploaded_at': datetime.utcnow().isoformat(),
+            'original_filename': sanitize_metadata_value(upload['filename']),
+            'source': 'local',
+        }
+
+        blob_service.commit_chunks(
+            blob_name=blob_name,
+            block_ids=block_ids,
+            content_type=upload['content_type'],
+            metadata=metadata,
+        )
+
+        # Cleanup
+        with chunked_uploads_lock:
+            chunked_uploads.pop(upload_id, None)
+
+        result = {
+            'name': upload['filename'],
+            'path': blob_name,
+            'category': upload['category'],
+            'source': 'local',
+            **metadata,
+        }
+
+        logger.info(
+            f"Completed chunked upload {upload_id}: {upload['filename']}")
+        return jsonify({'success': True, 'data': result}), 201
+
+    except Exception as e:
+        logger.error(
+            f"Failed to complete chunked upload {upload_id}: {str(e)}",
+            exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.get('/api/tenders/<tender_id>/uploads/<upload_id>/status')
+@require_auth
+def get_chunked_upload_status(tender_id: str, upload_id: str):
+    """Get the status of a chunked upload (which chunks uploaded)"""
+    try:
+        with chunked_uploads_lock:
+            upload = chunked_uploads.get(upload_id)
+            if not upload:
+                return jsonify({
+                    'success': False,
+                    'error': 'Upload not found'
+                }), 404
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'completed_chunks': sorted(upload['completed_chunks']),
+                'total_chunks': upload['total_chunks'],
+            }
+        })
+    except Exception as e:
+        logger.error(
+            f"Failed to get chunked upload status: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.delete('/api/tenders/<tender_id>/uploads/<upload_id>')
+@require_auth
+def abort_chunked_upload(tender_id: str, upload_id: str):
+    """Abort and cleanup a chunked upload"""
+    try:
+        with chunked_uploads_lock:
+            upload = chunked_uploads.pop(upload_id, None)
+
+        if not upload:
+            return jsonify({
+                'success': False,
+                'error': 'Upload not found'
+            }), 404
+
+        logger.info(
+            f"Aborted chunked upload {upload_id}: {upload['filename']}")
+        return jsonify({
+            'success': True,
+            'data': {'message': 'Upload aborted'}
+        })
+    except Exception as e:
+        logger.error(
+            f"Failed to abort chunked upload: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _schedule_job_cleanup(job_id: str, job_type: str = 'bulk'):
+    """Schedule removal of a completed/failed job from memory"""
+    def _cleanup():
+        time.sleep(JOB_CLEANUP_SECONDS)
+        if job_type == 'bulk':
+            with bulk_upload_jobs_lock:
+                bulk_upload_jobs.pop(job_id, None)
+                logger.info(f"Cleaned up bulk upload job {job_id}")
+
+    t = threading.Thread(target=_cleanup, daemon=True)
+    t.start()
 
 
 @app.get('/api/tenders/<tender_id>/files/<path:file_path>')

@@ -67,7 +67,7 @@ export const filesApi = {
         return response.data.data || [];
     },
 
-    upload: async (tenderId: string, file: File, category: string = 'uncategorized', source?: 'local' | 'sharepoint'): Promise<TenderFile> => {
+    upload: async (tenderId: string, file: File, category: string = 'uncategorized', source?: 'local' | 'sharepoint', signal?: AbortSignal): Promise<TenderFile> => {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('category', category);
@@ -82,6 +82,8 @@ export const filesApi = {
                 headers: {
                     'Content-Type': 'multipart/form-data',
                 },
+                timeout: 120000, // 120s per file
+                signal,
             }
         );
 
@@ -104,6 +106,103 @@ export const filesApi = {
 
     delete: async (tenderId: string, filePath: string): Promise<void> => {
         await api.delete(`/tenders/${tenderId}/files/${filePath}`);
+    },
+
+    // --- Bulk upload (backend job) ---
+
+    bulkUpload: async (tenderId: string, files: File[], category: string = 'uncategorized'): Promise<{ job_id: string; total_files: number }> => {
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append('files', file);
+        }
+        formData.append('category', category);
+
+        const response = await api.post<ApiResponse<{ job_id: string; total_files: number }>>(
+            `/tenders/${tenderId}/files/bulk`,
+            formData,
+            {
+                headers: { 'Content-Type': 'multipart/form-data' },
+                timeout: 300000, // 5 min to send all files
+            }
+        );
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to start bulk upload');
+        }
+        return response.data.data;
+    },
+
+    getBulkJobStatus: async (tenderId: string, jobId: string): Promise<{
+        job_id: string;
+        status: string;
+        progress: number;
+        total: number;
+        current_file: string;
+        success_count: number;
+        error_count: number;
+        errors: string[];
+    }> => {
+        const response = await api.get<ApiResponse<any>>(`/tenders/${tenderId}/files/bulk-jobs/${jobId}`);
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to get bulk job status');
+        }
+        return response.data.data;
+    },
+
+    cancelBulkJob: async (tenderId: string, jobId: string): Promise<void> => {
+        await api.post(`/tenders/${tenderId}/files/bulk-jobs/${jobId}/cancel`);
+    },
+
+    // --- Chunked upload ---
+
+    initChunkedUpload: async (tenderId: string, params: {
+        filename: string;
+        size: number;
+        category: string;
+        content_type: string;
+    }, signal?: AbortSignal): Promise<{ upload_id: string; chunk_size: number; total_chunks: number }> => {
+        const response = await api.post<ApiResponse<{ upload_id: string; chunk_size: number; total_chunks: number }>>(
+            `/tenders/${tenderId}/uploads/init`,
+            params,
+            { signal }
+        );
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to init chunked upload');
+        }
+        return response.data.data;
+    },
+
+    uploadChunk: async (tenderId: string, uploadId: string, chunkIndex: number, data: Blob, signal?: AbortSignal): Promise<void> => {
+        await api.put(
+            `/tenders/${tenderId}/uploads/${uploadId}/chunks/${chunkIndex}`,
+            data,
+            {
+                headers: { 'Content-Type': 'application/octet-stream' },
+                timeout: 120000,
+                signal,
+            }
+        );
+    },
+
+    completeChunkedUpload: async (tenderId: string, uploadId: string, signal?: AbortSignal): Promise<TenderFile> => {
+        const response = await api.post<ApiResponse<TenderFile>>(
+            `/tenders/${tenderId}/uploads/${uploadId}/complete`,
+            {},
+            { signal }
+        );
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to complete chunked upload');
+        }
+        return response.data.data;
+    },
+
+    getChunkedUploadStatus: async (tenderId: string, uploadId: string): Promise<{ completed_chunks: number[]; total_chunks: number }> => {
+        const response = await api.get<ApiResponse<{ completed_chunks: number[]; total_chunks: number }>>(
+            `/tenders/${tenderId}/uploads/${uploadId}/status`
+        );
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to get chunked upload status');
+        }
+        return response.data.data;
     },
 };
 

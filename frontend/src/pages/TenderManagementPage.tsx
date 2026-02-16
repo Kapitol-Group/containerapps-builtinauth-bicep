@@ -9,6 +9,8 @@ import FilePreview from '../components/FilePreview';
 import ExtractionModal from '../components/ExtractionModal';
 import BatchesTab from '../components/BatchesTab';
 import Dialog from '../components/Dialog';
+import UploadProgressPanel from '../components/UploadProgressPanel';
+import { useUploadManager } from '../hooks/useUploadManager';
 import './TenderManagementPage.css';
 
 type MainTab = 'files' | 'batches';
@@ -30,6 +32,10 @@ const TenderManagementPage: React.FC = () => {
     message: '', 
     title: '' 
   });
+
+  // Upload manager
+  const uploadManager = useUploadManager(tenderId);
+  const isUploading = uploadManager.progress?.status === 'uploading' || uploadManager.progress?.status === 'paused';
 
   // Main tab navigation
   const [activeTab, setActiveTab] = useState<MainTab>('files');
@@ -90,19 +96,16 @@ const TenderManagementPage: React.FC = () => {
 
 
 
-  const handleFilesUploaded = async (uploadedFiles: File[]) => {
-    if (!tenderId) return;
-    
-    for (const file of uploadedFiles) {
-      try {
-        await filesApi.upload(tenderId, file);
-      } catch (error) {
-        console.error(`Failed to upload ${file.name}:`, error);
-      }
-    }
-    
-    loadFiles();
+  const handleFilesUploaded = (uploadedFiles: File[]) => {
+    uploadManager.startUpload(uploadedFiles);
   };
+
+  // Reload files when upload completes
+  useEffect(() => {
+    if (uploadManager.progress?.status === 'complete') {
+      loadFiles();
+    }
+  }, [uploadManager.progress?.status]);
 
   const handleFileSelect = (file: TenderFile) => {
     setSelectedFile(file);
@@ -142,6 +145,40 @@ const TenderManagementPage: React.FC = () => {
         show: true, 
         title: 'Delete Failed', 
         message: `Failed to delete file: ${error}` 
+      });
+    }
+  };
+
+  const handleBulkDelete = async (filesToDelete: TenderFile[]) => {
+    if (!tenderId || filesToDelete.length === 0) return;
+    
+    const results = await Promise.allSettled(
+      filesToDelete.map(file => filesApi.delete(tenderId, file.path))
+    );
+    
+    const failures = results.filter(r => r.status === 'rejected');
+    
+    // Clear selection for successfully deleted files
+    const deletedPaths = new Set(
+      filesToDelete
+        .filter((_, i) => results[i].status === 'fulfilled')
+        .map(f => f.path)
+    );
+    
+    setSelectedFiles(prev => prev.filter(f => !deletedPaths.has(f.path)));
+    
+    if (selectedFile && deletedPaths.has(selectedFile.path)) {
+      setSelectedFile(null);
+    }
+    
+    // Reload files list
+    loadFiles();
+    
+    if (failures.length > 0) {
+      setAlertDialog({
+        show: true,
+        title: 'Partial Delete Failure',
+        message: `${failures.length} of ${filesToDelete.length} files failed to delete. Successfully deleted ${filesToDelete.length - failures.length} files.`
       });
     }
   };
@@ -186,7 +223,7 @@ const TenderManagementPage: React.FC = () => {
         {activeTab === 'files' && (
           <>
             <div className="upload-section">
-              <FileUploadZone onFilesDropped={handleFilesUploaded} />
+              <FileUploadZone onFilesDropped={handleFilesUploaded} disabled={isUploading} />
               
               {config?.sharepointBaseUrl && (
                 <SharePointFileBrowser
@@ -197,6 +234,16 @@ const TenderManagementPage: React.FC = () => {
                 />
               )}
             </div>
+
+            {uploadManager.progress && (
+              <UploadProgressPanel
+                progress={uploadManager.progress}
+                onPause={uploadManager.pause}
+                onResume={uploadManager.resume}
+                onCancel={uploadManager.cancel}
+                onDismiss={uploadManager.dismiss}
+              />
+            )}
             
             <div className="file-workspace">
               <FileBrowser
@@ -206,6 +253,7 @@ const TenderManagementPage: React.FC = () => {
                 onFileSelect={handleFileSelect}
                 onSelectionChange={setSelectedFiles}
                 onFileDelete={handleFileDelete}
+                onBulkDelete={handleBulkDelete}
                 loading={loading}
               />
               

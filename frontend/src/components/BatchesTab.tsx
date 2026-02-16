@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { batchesApi } from '../services/api';
 import BatchList from './BatchList';
 import BatchViewer from './BatchViewer';
@@ -15,21 +15,26 @@ const BatchesTab: React.FC<BatchesTabProps> = ({ tenderId, onError, onReloadFile
     const [batches, setBatches] = useState<Batch[]>([]);
     const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
     const [selectedBatchData, setSelectedBatchData] = useState<BatchWithFiles | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [loadingBatch, setLoadingBatch] = useState(false);
+    const hasLoadedRef = useRef(false);
 
-    const loadBatches = async () => {
+    const loadBatches = useCallback(async () => {
         try {
-            setLoading(true);
+            // Only show loading indicator on initial load, not background refreshes
+            if (!hasLoadedRef.current) {
+                setLoading(true);
+            }
             const fetchedBatches = await batchesApi.list(tenderId);
             setBatches(fetchedBatches);
+            hasLoadedRef.current = true;
         } catch (error) {
             console.error('Failed to load batches:', error);
             onError('Failed to load batches');
         } finally {
             setLoading(false);
         }
-    };
+    }, [tenderId, onError]);
 
     useEffect(() => {
         loadBatches();
