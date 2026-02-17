@@ -12,6 +12,7 @@ from io import BytesIO
 
 from azure.storage.blob import BlobServiceClient, BlobBlock, ContainerClient, ContentSettings
 from azure.identity import DefaultAzureCredential
+from azure.core.exceptions import ResourceNotFoundError
 from werkzeug.datastructures import FileStorage
 
 logger = logging.getLogger(__name__)
@@ -208,13 +209,19 @@ def _enforce_batch_metadata_limits(metadata: Dict) -> Dict:
 class BlobStorageService:
     """Service for managing tender documents in Azure Blob Storage"""
 
-    def __init__(self, account_name: str, container_name: str = 'tenders'):
+    def __init__(
+        self,
+        account_name: str,
+        container_name: str = 'tenders',
+        ensure_container: bool = True
+    ):
         """
         Initialize the blob storage service
 
         Args:
             account_name: Azure Storage account name
             container_name: Container name for tender documents
+            ensure_container: Whether to ensure the container exists on init
         """
         self.account_name = account_name
         self.container_name = container_name
@@ -237,10 +244,13 @@ class BlobStorageService:
         self.container_client = self.blob_service_client.get_container_client(
             container_name)
 
+        if not ensure_container:
+            return
+
         # Ensure container exists
         try:
             self.container_client.get_container_properties()
-        except Exception:
+        except ResourceNotFoundError:
             self.container_client.create_container()
 
     def list_tenders(self) -> List[Dict]:
@@ -524,11 +534,16 @@ class BlobStorageService:
             content_settings=ContentSettings(content_type=file.content_type)
         )
 
+        properties = blob_client.get_blob_properties()
+
         return {
             'name': file.filename,
             'path': blob_name,
+            'size': properties.size,
+            'content_type': properties.content_settings.content_type if properties.content_settings else file.content_type,
             'category': category,
             'source': source,
+            'last_modified': properties.last_modified.isoformat() if properties.last_modified else None,
             **file_metadata
         }
 
@@ -584,9 +599,13 @@ class BlobStorageService:
         )
         logger.info(f"Committed {len(block_list)} blocks for {blob_name}")
 
+        properties = blob_client.get_blob_properties()
+
         return {
             'path': blob_name,
             'content_type': content_type,
+            'size': properties.size,
+            'last_modified': properties.last_modified.isoformat() if properties.last_modified else None,
         }
 
     def download_file(self, tender_id: str, file_path: str) -> Dict:
@@ -614,6 +633,41 @@ class BlobStorageService:
             'content_type': properties.content_settings.content_type if properties.content_settings else 'application/octet-stream',
             'metadata': properties.metadata
         }
+
+    def get_file_info(self, tender_id: str, file_path: str) -> Optional[Dict]:
+        """
+        Get file metadata and properties for a single blob path.
+
+        Args:
+            tender_id: Tender identifier (unused, kept for API compatibility)
+            file_path: Full blob path
+
+        Returns:
+            File metadata dictionary or None if not found
+        """
+        if not self.container_client:
+            return None
+
+        try:
+            blob_client = self.container_client.get_blob_client(file_path)
+            properties = blob_client.get_blob_properties()
+            filename = file_path.split('/')[-1]
+
+            return {
+                'name': filename,
+                'path': file_path,
+                'size': properties.size,
+                'content_type': properties.content_settings.content_type if properties.content_settings else None,
+                'category': properties.metadata.get('category', 'uncategorized') if properties.metadata else 'uncategorized',
+                'uploaded_by': properties.metadata.get('uploaded_by') if properties.metadata else None,
+                'uploaded_at': properties.metadata.get('uploaded_at') if properties.metadata else None,
+                'last_modified': properties.last_modified.isoformat() if properties.last_modified else None,
+                'source': properties.metadata.get('source', 'local') if properties.metadata else 'local',
+                'batch_id': properties.metadata.get('batch_id') if properties.metadata else None,
+                'submitted_at': properties.metadata.get('submitted_at') if properties.metadata else None
+            }
+        except Exception:
+            return None
 
     def update_file_metadata(self, tender_id: str, file_path: str, metadata: Dict):
         """
@@ -654,6 +708,83 @@ class BlobStorageService:
         blob_client.delete_blob()
 
     # Batch Management Methods
+
+    def upsert_batch_record(self, tender_id: str, batch_record: Dict) -> Dict:
+        """
+        Upsert a batch metadata blob using an explicit batch_id.
+
+        Args:
+            tender_id: Tender identifier
+            batch_record: Batch dictionary
+
+        Returns:
+            Batch information dictionary
+        """
+        if not self.container_client:
+            raise Exception("Blob storage not configured")
+
+        batch_id = batch_record.get('batch_id')
+        if not batch_id:
+            raise ValueError("batch_record requires batch_id")
+
+        file_paths = batch_record.get('file_paths', [])
+        title_block_coords = batch_record.get('title_block_coords', {})
+        submission_attempts = batch_record.get('submission_attempts', [])
+        folder_list = batch_record.get('folder_list', [])
+
+        batch_blob_name = f"{tender_id}/.batch_{batch_id}"
+
+        batch_metadata = {
+            'batch_id': sanitize_metadata_value(str(batch_id)),
+            'batch_name': sanitize_metadata_value(str(batch_record.get('batch_name', batch_id))),
+            'discipline': sanitize_metadata_value(str(batch_record.get('discipline', ''))),
+            'file_paths': _json_dumps_compact(file_paths if isinstance(file_paths, list) else []),
+            'title_block_coords': _json_dumps_compact(title_block_coords if isinstance(title_block_coords, dict) else {}),
+            'status': sanitize_metadata_value(str(batch_record.get('status', 'pending'))),
+            'submitted_at': sanitize_metadata_value(str(batch_record.get('submitted_at') or datetime.utcnow().isoformat())),
+            'submitted_by': sanitize_metadata_value(str(batch_record.get('submitted_by', 'Unknown'))),
+            'file_count': str(int(batch_record.get('file_count', len(file_paths)))),
+            'job_id': sanitize_metadata_value(str(batch_record.get('job_id', ''))),
+            'submission_attempts': _json_dumps_compact(
+                _normalize_submission_attempts(submission_attempts if isinstance(submission_attempts, list) else [])
+            ),
+            'last_error': sanitize_metadata_value(str(batch_record.get('last_error', ''))),
+            'uipath_reference': sanitize_metadata_value(str(batch_record.get('uipath_reference', ''))),
+            'uipath_submission_id': sanitize_metadata_value(str(batch_record.get('uipath_submission_id', ''))),
+            'uipath_project_id': sanitize_metadata_value(str(batch_record.get('uipath_project_id', ''))),
+            'sharepoint_folder_path': sanitize_metadata_value(str(batch_record.get('sharepoint_folder_path', ''))),
+            'output_folder_path': sanitize_metadata_value(str(batch_record.get('output_folder_path', ''))),
+            'folder_list': _json_dumps_compact(_normalize_folder_list(folder_list if isinstance(folder_list, list) else []))
+        }
+        batch_metadata = _enforce_batch_metadata_limits(batch_metadata)
+
+        blob_client = self.container_client.get_blob_client(batch_blob_name)
+        blob_client.upload_blob(
+            data=b'',
+            metadata=batch_metadata,
+            overwrite=True
+        )
+
+        return self.get_batch(tender_id, batch_id) or {
+            'batch_id': batch_id,
+            'batch_name': batch_record.get('batch_name', batch_id),
+            'discipline': batch_record.get('discipline'),
+            'file_paths': file_paths,
+            'title_block_coords': title_block_coords,
+            'status': batch_record.get('status', 'pending'),
+            'submitted_at': batch_record.get('submitted_at'),
+            'submitted_by': batch_record.get('submitted_by'),
+            'file_count': int(batch_record.get('file_count', len(file_paths))),
+            'job_id': batch_record.get('job_id', ''),
+            'submission_attempts': submission_attempts,
+            'last_error': batch_record.get('last_error', ''),
+            'uipath_reference': batch_record.get('uipath_reference', ''),
+            'uipath_submission_id': batch_record.get('uipath_submission_id', ''),
+            'uipath_project_id': batch_record.get('uipath_project_id', ''),
+            'sharepoint_folder_path': batch_record.get('sharepoint_folder_path', ''),
+            'output_folder_path': batch_record.get('output_folder_path', ''),
+            'folder_list': folder_list,
+        }
 
     def create_batch(self, tender_id: str, batch_name: str, discipline: str,
                      file_paths: List[str], title_block_coords: Dict,
@@ -769,7 +900,15 @@ class BlobStorageService:
                         'submitted_at': blob.metadata.get('submitted_at'),
                         'submitted_by': blob.metadata.get('submitted_by'),
                         'file_count': int(blob.metadata.get('file_count', 0)),
-                        'job_id': blob.metadata.get('job_id', '')
+                        'job_id': blob.metadata.get('job_id', ''),
+                        'submission_attempts': json.loads(blob.metadata.get('submission_attempts', '[]')),
+                        'last_error': blob.metadata.get('last_error', ''),
+                        'uipath_reference': blob.metadata.get('uipath_reference', ''),
+                        'uipath_submission_id': blob.metadata.get('uipath_submission_id', ''),
+                        'uipath_project_id': blob.metadata.get('uipath_project_id', ''),
+                        'sharepoint_folder_path': blob.metadata.get('sharepoint_folder_path', ''),
+                        'output_folder_path': blob.metadata.get('output_folder_path', ''),
+                        'folder_list': json.loads(blob.metadata.get('folder_list', '[]'))
                     }
                     batches.append(batch)
                 except (json.JSONDecodeError, ValueError) as e:
@@ -782,6 +921,33 @@ class BlobStorageService:
 
         logger.info(f"Found {len(batches)} batches for tender {tender_id}")
         return batches
+
+    def get_batch_by_reference(self, reference: str) -> Optional[Dict]:
+        """
+        Find a batch by UiPath reference across all tenders.
+
+        Args:
+            reference: UiPath reference identifier
+
+        Returns:
+            Dictionary containing tender_id and batch, or None if not found
+        """
+        if not self.container_client or not reference:
+            return None
+
+        tenders = self.list_tenders()
+        for tender in tenders:
+            tender_id = tender.get('id')
+            if not tender_id:
+                continue
+            batches = self.list_batches(tender_id)
+            for batch in batches:
+                if batch.get('uipath_reference') == reference:
+                    return {
+                        'tender_id': tender_id,
+                        'batch': batch
+                    }
+        return None
 
     def get_batch(self, tender_id: str, batch_id: str) -> Optional[Dict]:
         """

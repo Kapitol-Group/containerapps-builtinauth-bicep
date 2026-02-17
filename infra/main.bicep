@@ -55,6 +55,26 @@ param uipathFolderId string = ''
 @description('UiPath Queue Name')
 param uipathQueueName string = ''
 
+@description('Cosmos SQL database name for metadata')
+param cosmosDatabaseName string = 'kapitol-tender-automation'
+
+@description('Cosmos metadata container name')
+param cosmosMetadataContainerName string = 'metadata'
+
+@description('Cosmos batch reference index container name')
+param cosmosBatchReferenceContainerName string = 'batch-reference-index'
+
+@allowed([
+  'blob'
+  'dual'
+  'cosmos'
+])
+@description('Metadata store mode for backend')
+param metadataStoreMode string = 'blob'
+
+@description('Whether metadata reads can fallback to blob in dual mode')
+param metadataReadFallback string = 'true'
+
 var resourceToken = toLower(uniqueString(subscription().id, name, location))
 var tags = { 'azd-env-name': name }
 
@@ -102,6 +122,19 @@ module storage 'core/storage/storage-account.bicep' = {
   }
 }
 
+module cosmos 'core/data/cosmos-account.bicep' = {
+  name: 'cosmos'
+  scope: resourceGroup
+  params: {
+    name: '${take(replace(prefix, '-', ''), 35)}cosmos'
+    location: location
+    tags: tags
+    databaseName: cosmosDatabaseName
+    metadataContainerName: cosmosMetadataContainerName
+    batchReferenceContainerName: cosmosBatchReferenceContainerName
+  }
+}
+
 module aca 'aca.bicep' = {
   name: 'aca'
   scope: resourceGroup
@@ -114,6 +147,7 @@ module aca 'aca.bicep' = {
     containerRegistryName: containerApps.outputs.registryName
     exists: acaExists
     storageAccountName: storage.outputs.name
+    storageContainerName: storage.outputs.containerName
     uipathMockMode: 'true'
     uipathTenantName: uipathTenantName
     uipathAppId: uipathAppId
@@ -131,6 +165,13 @@ module aca 'aca.bicep' = {
     dataFabricApiKey: dataFabricApiKey
     // Batch progress polling configuration
     batchProgressPollingInterval: batchProgressPollingInterval
+    // Cosmos metadata configuration
+    cosmosAccountEndpoint: cosmos.outputs.endpoint
+    cosmosDatabaseName: cosmos.outputs.databaseName
+    cosmosMetadataContainerName: cosmos.outputs.metadataContainerName
+    cosmosBatchReferenceContainerName: cosmos.outputs.batchReferenceContainerName
+    metadataStoreMode: metadataStoreMode
+    metadataReadFallback: metadataReadFallback
   }
 }
 
@@ -141,6 +182,15 @@ module storageRoleAssignment 'core/storage/storage-role-assignment.bicep' = {
   scope: resourceGroup
   params: {
     storageAccountName: storage.outputs.name
+    principalId: aca.outputs.identityPrincipalId
+  }
+}
+
+module cosmosRoleAssignment 'core/data/cosmos-role-assignment.bicep' = {
+  name: 'cosmos-role-assignment'
+  scope: resourceGroup
+  params: {
+    cosmosAccountName: cosmos.outputs.name
     principalId: aca.outputs.identityPrincipalId
   }
 }
@@ -189,6 +239,15 @@ output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
 
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_STORAGE_ACCOUNT_ID string = storage.outputs.id
+output AZURE_STORAGE_CONTAINER_NAME string = storage.outputs.containerName
+output AZURE_COSMOS_ACCOUNT_NAME string = cosmos.outputs.name
+output AZURE_COSMOS_ACCOUNT_ENDPOINT string = cosmos.outputs.endpoint
+output COSMOS_ACCOUNT_ENDPOINT string = cosmos.outputs.endpoint
+output COSMOS_DATABASE_NAME string = cosmos.outputs.databaseName
+output COSMOS_METADATA_CONTAINER_NAME string = cosmos.outputs.metadataContainerName
+output COSMOS_BATCH_REFERENCE_CONTAINER_NAME string = cosmos.outputs.batchReferenceContainerName
+output METADATA_STORE_MODE string = metadataStoreMode
+output METADATA_READ_FALLBACK string = metadataReadFallback
 
 // Outputs for SharePoint FilePicker configuration
 output ENTRA_CLIENT_ID string = registration.outputs.clientAppId

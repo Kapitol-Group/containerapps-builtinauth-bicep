@@ -10,6 +10,7 @@ param exists bool
 
 // Environment variables for the backend
 param storageAccountName string = ''
+param storageContainerName string = 'tender-documents'
 param uipathTenantName string = ''
 param uipathAppId string = ''
 param uipathApiKey string = ''
@@ -28,6 +29,14 @@ param dataFabricApiKey string = ''
 
 // Batch progress polling configuration
 param batchProgressPollingInterval string = '30000'
+
+// Cosmos metadata configuration
+param cosmosAccountEndpoint string = ''
+param cosmosDatabaseName string = 'kapitol-tender-automation'
+param cosmosMetadataContainerName string = 'metadata'
+param cosmosBatchReferenceContainerName string = 'batch-reference-index'
+param metadataStoreMode string = 'blob'
+param metadataReadFallback string = 'true'
 
 @description('Custom domain hostname (optional)')
 param customHostName string = ''
@@ -52,7 +61,7 @@ var baseEnvVars = [
   }
   {
     name: 'AZURE_STORAGE_CONTAINER_NAME'
-    value: 'tender-documents'
+    value: storageContainerName
   }
   {
     name: 'UIPATH_TENANT_NAME'
@@ -93,6 +102,30 @@ var baseEnvVars = [
   {
     name: 'BATCH_PROGRESS_POLLING_INTERVAL'
     value: batchProgressPollingInterval
+  }
+  {
+    name: 'COSMOS_ACCOUNT_ENDPOINT'
+    value: cosmosAccountEndpoint
+  }
+  {
+    name: 'COSMOS_DATABASE_NAME'
+    value: cosmosDatabaseName
+  }
+  {
+    name: 'COSMOS_METADATA_CONTAINER_NAME'
+    value: cosmosMetadataContainerName
+  }
+  {
+    name: 'COSMOS_BATCH_REFERENCE_CONTAINER_NAME'
+    value: cosmosBatchReferenceContainerName
+  }
+  {
+    name: 'METADATA_STORE_MODE'
+    value: metadataStoreMode
+  }
+  {
+    name: 'METADATA_READ_FALLBACK'
+    value: metadataReadFallback
   }
 ]
 

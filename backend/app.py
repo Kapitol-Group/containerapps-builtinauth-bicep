@@ -15,6 +15,7 @@ from werkzeug.datastructures import FileStorage
 import requests
 
 from services.blob_storage import BlobStorageService, sanitize_metadata_value
+from services.metadata_store_factory import build_metadata_store
 from services.uipath_client import UiPathClient
 from utils.auth import extract_user_info, require_auth
 
@@ -55,6 +56,7 @@ blob_service = BlobStorageService(
     container_name=os.getenv(
         'AZURE_STORAGE_CONTAINER_NAME', 'tender-documents')
 )
+metadata_store = build_metadata_store(blob_service)
 
 uipath_client = UiPathClient(
     tenant_name=os.getenv('UIPATH_TENANT_NAME'),
@@ -101,6 +103,7 @@ logger.info(
     f"Storage Account: {os.getenv('AZURE_STORAGE_ACCOUNT_NAME', 'NOT SET')}")
 logger.info(
     f"Container Name: {os.getenv('AZURE_STORAGE_CONTAINER_NAME', 'tender-documents')}")
+logger.info(f"Metadata Store Mode: {os.getenv('METADATA_STORE_MODE', 'blob')}")
 logger.info(f"UiPath Mock Mode: {os.getenv('UIPATH_MOCK_MODE', 'true')}")
 logger.info("=" * 60)
 
@@ -142,7 +145,7 @@ def list_tenders():
     """List all tenders"""
     try:
         logger.debug("Listing all tenders")
-        tenders = blob_service.list_tenders()
+        tenders = metadata_store.list_tenders()
         logger.debug(f"Found {len(tenders)} tenders")
         return jsonify({
             'success': True,
@@ -215,7 +218,7 @@ def create_tender():
         if output_folder_path:
             metadata['output_folder_path'] = output_folder_path
 
-        tender = blob_service.create_tender(
+        tender = metadata_store.create_tender(
             tender_name=tender_name,
             created_by=user_info.get('name', 'Unknown'),
             metadata=metadata
@@ -258,7 +261,7 @@ def _process_uipath_submission_async(
             f"[Background] Starting UiPath submission for batch {batch_id}")
 
         # Get current batch to track attempts
-        batch = blob_service.get_batch(tender_id, batch_id)
+        batch = metadata_store.get_batch(tender_id, batch_id)
         attempts = batch.get('submission_attempts', []) if batch else []
 
         # Record attempt start
@@ -267,7 +270,7 @@ def _process_uipath_submission_async(
             'status': 'in_progress'
         })
 
-        blob_service.update_batch(tender_id, batch_id, {
+        metadata_store.update_batch(tender_id, batch_id, {
             'submission_attempts': attempts
         })
 
@@ -291,7 +294,7 @@ def _process_uipath_submission_async(
         attempts[-1]['status'] = 'success'
         attempts[-1]['reference'] = job.get('reference')
 
-        blob_service.update_batch(tender_id, batch_id, {
+        metadata_store.update_batch(tender_id, batch_id, {
             'status': 'running',
             'uipath_reference': job.get('reference', ''),
             'uipath_submission_id': job.get('submission_id', ''),
@@ -306,13 +309,13 @@ def _process_uipath_submission_async(
             f"[Background] User validation failed for batch {batch_id}: {str(user_error)}")
 
         try:
-            batch = blob_service.get_batch(tender_id, batch_id)
+            batch = metadata_store.get_batch(tender_id, batch_id)
             attempts = batch.get('submission_attempts', []) if batch else []
             if attempts:
                 attempts[-1]['status'] = 'failed'
                 attempts[-1]['error'] = _compact_batch_error(user_error)
 
-            blob_service.update_batch(tender_id, batch_id, {
+            metadata_store.update_batch(tender_id, batch_id, {
                 'status': 'failed',
                 'submission_attempts': attempts,
                 'last_error': _compact_batch_error(
@@ -328,13 +331,13 @@ def _process_uipath_submission_async(
             f"[Background] UiPath submission failed for batch {batch_id}: {str(e)}", exc_info=True)
 
         try:
-            batch = blob_service.get_batch(tender_id, batch_id)
+            batch = metadata_store.get_batch(tender_id, batch_id)
             attempts = batch.get('submission_attempts', []) if batch else []
             if attempts:
                 attempts[-1]['status'] = 'failed'
                 attempts[-1]['error'] = _compact_batch_error(e)
 
-            blob_service.update_batch(tender_id, batch_id, {
+            metadata_store.update_batch(tender_id, batch_id, {
                 'status': 'failed',
                 'submission_attempts': attempts,
                 'last_error': _compact_batch_error(e)
@@ -359,7 +362,7 @@ def retry_stuck_batches():
             logger.info("[Retry Worker] Checking for stuck batches...")
 
             # Find all tenders
-            tenders = blob_service.list_tenders()
+            tenders = metadata_store.list_tenders()
             stuck_count = 0
             retry_count = 0
 
@@ -367,7 +370,7 @@ def retry_stuck_batches():
                 tender_id = tender['id']
 
                 try:
-                    batches = blob_service.list_batches(tender_id)
+                    batches = metadata_store.list_batches(tender_id)
 
                     for batch in batches:
                         # Find batches stuck in pending for > 5 minutes
@@ -397,7 +400,7 @@ def retry_stuck_batches():
                                             f"with no tracked attempts. Marking as failed (legacy batch)."
                                         )
                                         try:
-                                            blob_service.update_batch(tender_id, batch['batch_id'], {
+                                            metadata_store.update_batch(tender_id, batch['batch_id'], {
                                                 'status': 'failed',
                                                 'last_error': f'Legacy batch older than 24 hours with no submission tracking. Original submission failed.'
                                             })
@@ -415,7 +418,7 @@ def retry_stuck_batches():
                                         )
                                         try:
                                             # Use simple update to avoid metadata size issues
-                                            blob_service.update_batch(tender_id, batch['batch_id'], {
+                                            metadata_store.update_batch(tender_id, batch['batch_id'], {
                                                 'status': 'failed',
                                                 'last_error': f'Too many submission attempts ({len(submission_attempts)}). Likely infinite retry loop or metadata size limit exceeded.'
                                             })
@@ -426,7 +429,7 @@ def retry_stuck_batches():
                                             try:
                                                 logger.warning(
                                                     f"[Retry Worker] Attempting to delete stuck batch {batch['batch_id']}")
-                                                blob_service.delete_batch(
+                                                metadata_store.delete_batch(
                                                     tender_id, batch['batch_id'])
                                             except Exception as delete_error:
                                                 logger.critical(
@@ -441,7 +444,7 @@ def retry_stuck_batches():
                                             f"Marking as permanently failed."
                                         )
                                         try:
-                                            blob_service.update_batch(tender_id, batch['batch_id'], {
+                                            metadata_store.update_batch(tender_id, batch['batch_id'], {
                                                 'status': 'failed',
                                                 'last_error': f'Maximum retry limit reached after {len(failed_attempts)} failed attempts'
                                             })
@@ -472,7 +475,7 @@ def retry_stuck_batches():
 
                                         # Update status to running on success
                                         try:
-                                            blob_service.update_batch_status(
+                                            metadata_store.update_batch_status(
                                                 tender_id, batch['batch_id'], 'running')
                                             retry_count += 1
 
@@ -490,7 +493,7 @@ def retry_stuck_batches():
                                             )
                                             try:
                                                 # Try simple status update without adding to submission_attempts
-                                                blob_service.update_batch(tender_id, batch['batch_id'], {
+                                                metadata_store.update_batch(tender_id, batch['batch_id'], {
                                                     'status': 'failed',
                                                     'last_error': f'Submitted to UiPath but metadata update failed (likely size limit): {error_msg}. Check UiPath for results.'
                                                 })
@@ -540,7 +543,7 @@ logger.info("Started retry worker thread")
 def get_tender(tender_id: str):
     """Get tender details"""
     try:
-        tender = blob_service.get_tender(tender_id)
+        tender = metadata_store.get_tender(tender_id)
         if not tender:
             return jsonify({
                 'success': False,
@@ -564,7 +567,9 @@ def delete_tender(tender_id: str):
     """Delete a tender"""
     try:
         logger.info(f"Attempting to delete tender: {tender_id}")
+        # Delete blob content first, then metadata records.
         blob_service.delete_tender(tender_id)
+        metadata_store.delete_tender(tender_id)
         logger.info(f"Successfully deleted tender: {tender_id}")
         return jsonify({
             'success': True,
@@ -590,7 +595,7 @@ def list_files(tender_id: str):
         exclude_batched = request.args.get(
             'exclude_batched', 'false').lower() == 'true'
 
-        files = blob_service.list_files(
+        files = metadata_store.list_files(
             tender_id, exclude_batched=exclude_batched)
         return jsonify({
             'success': True,
@@ -636,6 +641,26 @@ def upload_file(tender_id: str):
             source=source
         )
 
+        try:
+            metadata_store.upsert_file_record(tender_id, file_info)
+        except Exception as metadata_error:
+            logger.error(
+                "Metadata write failed after blob upload for %s. Deleting blob for compensation.",
+                file_info.get('path'),
+                exc_info=True
+            )
+            try:
+                blob_service.delete_file(tender_id, file_info.get('path'))
+                logger.warning("Compensation succeeded for file %s", file_info.get('path'))
+            except Exception as rollback_error:
+                logger.error(
+                    "Compensation failed for uploaded file %s: %s",
+                    file_info.get('path'),
+                    rollback_error,
+                    exc_info=True
+                )
+            raise metadata_error
+
         logger.info(
             f"Successfully uploaded file {file.filename} to tender {tender_id}")
         return jsonify({
@@ -669,7 +694,7 @@ def bulk_upload_files(tender_id: str):
             }), 400
 
         # Verify tender exists
-        tender = blob_service.get_tender(tender_id)
+        tender = metadata_store.get_tender(tender_id)
         if not tender:
             return jsonify({
                 'success': False,
@@ -802,13 +827,30 @@ def _process_bulk_upload(job_id: str, tender_id: str, file_items: list,
                     filename=file_name,
                     content_type=item['content_type'],
                 )
-                blob_service.upload_file(
+                uploaded_info = blob_service.upload_file(
                     tender_id=tender_id,
                     file=file_storage,
                     category=category,
                     uploaded_by=user_info.get('name', 'Unknown'),
                     source='local',
                 )
+                try:
+                    metadata_store.upsert_file_record(tender_id, uploaded_info)
+                except Exception:
+                    logger.error(
+                        "Bulk upload metadata write failed for %s. Deleting blob for compensation.",
+                        uploaded_info.get('path'),
+                        exc_info=True
+                    )
+                    try:
+                        blob_service.delete_file(tender_id, uploaded_info.get('path'))
+                    except Exception:
+                        logger.error(
+                            "Bulk upload compensation failed for %s",
+                            uploaded_info.get('path'),
+                            exc_info=True
+                        )
+                    raise
                 with bulk_upload_jobs_lock:
                     if job_id in bulk_upload_jobs:
                         bulk_upload_jobs[job_id]['success_count'] += 1
@@ -875,7 +917,7 @@ def init_chunked_upload(tender_id: str):
             }), 400
 
         # Verify tender exists
-        tender = blob_service.get_tender(tender_id)
+        tender = metadata_store.get_tender(tender_id)
         if not tender:
             return jsonify({'success': False, 'error': 'Tender not found'}), 404
 
@@ -995,24 +1037,50 @@ def complete_chunked_upload(tender_id: str, upload_id: str):
             'source': 'local',
         }
 
-        blob_service.commit_chunks(
+        committed = blob_service.commit_chunks(
             blob_name=blob_name,
             block_ids=block_ids,
             content_type=upload['content_type'],
             metadata=metadata,
         )
 
+        file_record = {
+            'name': upload['filename'],
+            'path': blob_name,
+            'size': committed.get('size', upload.get('size', 0)),
+            'content_type': committed.get('content_type', upload['content_type']),
+            'category': upload['category'],
+            'uploaded_by': upload['uploaded_by'],
+            'uploaded_at': metadata['uploaded_at'],
+            'last_modified': committed.get('last_modified'),
+            'source': 'local',
+        }
+
+        try:
+            metadata_store.upsert_file_record(tender_id, file_record)
+        except Exception as metadata_error:
+            logger.error(
+                "Metadata write failed after chunked commit for %s. Deleting blob for compensation.",
+                blob_name,
+                exc_info=True
+            )
+            try:
+                blob_service.delete_file(tender_id, blob_name)
+                logger.warning("Compensation succeeded for chunked file %s", blob_name)
+            except Exception as rollback_error:
+                logger.error(
+                    "Compensation failed for chunked file %s: %s",
+                    blob_name,
+                    rollback_error,
+                    exc_info=True
+                )
+            raise metadata_error
+
         # Cleanup
         with chunked_uploads_lock:
             chunked_uploads.pop(upload_id, None)
 
-        result = {
-            'name': upload['filename'],
-            'path': blob_name,
-            'category': upload['category'],
-            'source': 'local',
-            **metadata,
-        }
+        result = file_record
 
         logger.info(
             f"Completed chunked upload {upload_id}: {upload['filename']}")
@@ -1125,7 +1193,7 @@ def update_file_category(tender_id: str, file_path: str):
                 'error': 'Category is required'
             }), 400
 
-        blob_service.update_file_metadata(
+        metadata_store.update_file_metadata(
             tender_id=tender_id,
             file_path=file_path,
             metadata={'category': category}
@@ -1148,7 +1216,23 @@ def delete_file(tender_id: str, file_path: str):
     """Delete a file from a tender"""
     try:
         logger.info(f"Deleting file {file_path} from tender {tender_id}")
-        blob_service.delete_file(tender_id, file_path)
+        existing_metadata = metadata_store.get_file(tender_id, file_path)
+        metadata_store.delete_file_metadata(tender_id, file_path)
+        try:
+            blob_service.delete_file(tender_id, file_path)
+        except Exception:
+            if existing_metadata:
+                try:
+                    metadata_store.restore_file_record(tender_id, existing_metadata)
+                    logger.warning(
+                        "Blob delete failed, restored metadata for %s", file_path)
+                except Exception:
+                    logger.error(
+                        "Failed to restore metadata after blob delete failure for %s",
+                        file_path,
+                        exc_info=True
+                    )
+            raise
         logger.info(
             f"Successfully deleted file {file_path} from tender {tender_id}")
         return jsonify({
@@ -1184,7 +1268,7 @@ def create_batch(tender_id: str):
             }), 400
 
         # Validate files exist
-        all_files = blob_service.list_files(tender_id)
+        all_files = metadata_store.list_files(tender_id)
         existing_paths = {f['path'] for f in all_files}
         for file_path in file_paths:
             if file_path not in existing_paths:
@@ -1198,7 +1282,7 @@ def create_batch(tender_id: str):
             f"Creating batch '{batch_name}' for tender {tender_id} with {len(file_paths)} files")
 
         # Create batch (use email for UiPath user lookup, fallback to name if no email)
-        batch = blob_service.create_batch(
+        batch = metadata_store.create_batch(
             tender_id=tender_id,
             batch_name=batch_name,
             discipline=discipline,
@@ -1210,7 +1294,7 @@ def create_batch(tender_id: str):
         )
 
         # Update file categories and batch references
-        updated_count = blob_service.update_files_category(
+        updated_count = metadata_store.update_files_category(
             tender_id=tender_id,
             file_paths=file_paths,
             category=discipline,
@@ -1238,7 +1322,7 @@ def create_batch(tender_id: str):
 def list_batches(tender_id: str):
     """List all batches for a tender"""
     try:
-        batches = blob_service.list_batches(tender_id)
+        batches = metadata_store.list_batches(tender_id)
         return jsonify({
             'success': True,
             'data': batches
@@ -1314,7 +1398,7 @@ def get_batch_progress_summary(tender_id: str):
 
         for batch_id in batch_ids:
             try:
-                batch = blob_service.get_batch(tender_id, batch_id)
+                batch = metadata_store.get_batch(tender_id, batch_id)
                 if not batch:
                     errors_by_batch[batch_id] = 'Batch not found'
                     continue
@@ -1387,7 +1471,7 @@ def get_batch_progress_summary(tender_id: str):
 def get_batch(tender_id: str, batch_id: str):
     """Get batch details and files"""
     try:
-        batch = blob_service.get_batch(tender_id, batch_id)
+        batch = metadata_store.get_batch(tender_id, batch_id)
         if not batch:
             return jsonify({
                 'success': False,
@@ -1395,7 +1479,7 @@ def get_batch(tender_id: str, batch_id: str):
             }), 404
 
         # Get files in batch
-        files = blob_service.get_batch_files(tender_id, batch_id)
+        files = metadata_store.get_batch_files(tender_id, batch_id)
 
         return jsonify({
             'success': True,
@@ -1427,7 +1511,7 @@ def update_batch_status(tender_id: str, batch_id: str):
                 'error': 'Status is required'
             }), 400
 
-        batch = blob_service.update_batch_status(tender_id, batch_id, status)
+        batch = metadata_store.update_batch_status(tender_id, batch_id, status)
 
         if not batch:
             return jsonify({
@@ -1459,7 +1543,7 @@ def retry_batch(tender_id: str, batch_id: str):
     """Manually retry a failed or stuck batch submission"""
     try:
         # Verify batch exists
-        batch = blob_service.get_batch(tender_id, batch_id)
+        batch = metadata_store.get_batch(tender_id, batch_id)
         if not batch:
             return jsonify({
                 'success': False,
@@ -1475,7 +1559,7 @@ def retry_batch(tender_id: str, batch_id: str):
             }), 400
 
         # Get tender info for submission
-        tender = blob_service.get_tender(tender_id)
+        tender = metadata_store.get_tender(tender_id)
         if not tender:
             return jsonify({
                 'success': False,
@@ -1544,7 +1628,7 @@ def retry_batch(tender_id: str, batch_id: str):
 def delete_batch(tender_id: str, batch_id: str):
     """Delete a batch (admin only - files remain categorized)"""
     try:
-        success = blob_service.delete_batch(tender_id, batch_id)
+        success = metadata_store.delete_batch(tender_id, batch_id)
 
         if not success:
             return jsonify({
@@ -1578,7 +1662,7 @@ def get_batch_progress(tender_id: str, batch_id: str):
     """
     try:
         # Get batch to retrieve CUID reference
-        batch = blob_service.get_batch(tender_id, batch_id)
+        batch = metadata_store.get_batch(tender_id, batch_id)
         if not batch:
             return jsonify({
                 'success': False,
@@ -1672,41 +1756,24 @@ def uipath_batch_complete_webhook():
         logger.info(
             f"Webhook received: Batch {reference} status={webhook_status}")
 
-        # Find batch by uipath_reference across all tenders
-        # Note: This is not the most efficient approach, but blob storage metadata
-        # doesn't support cross-tender queries. Consider caching or indexing if performance becomes an issue.
-        tenders = blob_service.list_tenders()
-        batch_found = False
-
-        for tender in tenders:
-            tender_id = tender['name']
-            batches = blob_service.list_batches(tender_id)
-
-            for batch in batches:
-                if batch.get('uipath_reference') == reference:
-                    batch_id = batch.get('batch_id')
-                    logger.info(
-                        f"Found batch {batch_id} in tender {tender_id} for reference {reference}")
-
-                    # Update batch status
-                    blob_service.update_batch_status(
-                        tender_id, batch_id, webhook_status)
-
-                    logger.info(
-                        f"Updated batch {batch_id} status to {webhook_status}")
-                    batch_found = True
-                    break
-
-            if batch_found:
-                break
-
-        if not batch_found:
+        lookup = metadata_store.get_batch_by_reference(reference)
+        if not lookup:
             logger.warning(
                 f"Webhook received for unknown reference: {reference}")
             return jsonify({
                 'success': False,
                 'error': 'Batch not found for reference'
             }), 404
+
+        tender_id = lookup.get('tender_id')
+        batch = lookup.get('batch', {})
+        batch_id = batch.get('batch_id')
+
+        logger.info(
+            f"Found batch {batch_id} in tender {tender_id} for reference {reference}")
+        metadata_store.update_batch_status(tender_id, batch_id, webhook_status)
+        logger.info(
+            f"Updated batch {batch_id} status to {webhook_status}")
 
         return jsonify({
             'success': True,
@@ -1735,7 +1802,7 @@ def purge_old_batches():
         logger.info(
             f"[Admin] Starting manual purge of batches older than {age_hours} hours")
 
-        tenders = blob_service.list_tenders()
+        tenders = metadata_store.list_tenders()
         purged_count = 0
         checked_count = 0
         errors = []
@@ -1744,7 +1811,7 @@ def purge_old_batches():
             tender_id = tender['id']
 
             try:
-                batches = blob_service.list_batches(tender_id)
+                batches = metadata_store.list_batches(tender_id)
 
                 for batch in batches:
                     # Only process pending batches
@@ -1766,7 +1833,7 @@ def purge_old_batches():
                                     f"(age: {int(age.total_seconds()//3600)} hours)"
                                 )
 
-                                blob_service.update_batch(tender_id, batch_id, {
+                                metadata_store.update_batch(tender_id, batch_id, {
                                     'status': 'failed',
                                     'last_error': f'Manually purged: Legacy batch older than {age_hours} hours with no submission tracking'
                                 })
@@ -1851,7 +1918,7 @@ def queue_extraction():
 
         # Create batch first (with both discipline and destination for compatibility)
         # Use email for UiPath user lookup, fallback to name if no email
-        batch = blob_service.create_batch(
+        batch = metadata_store.create_batch(
             tender_id=tender_id,
             batch_name=batch_name,
             discipline=category,  # Store in discipline field for backward compatibility
@@ -1866,7 +1933,7 @@ def queue_extraction():
         )
 
         # Update file categories and batch references
-        blob_service.update_files_category(
+        metadata_store.update_files_category(
             tender_id=tender_id,
             file_paths=file_paths,
             category=category,
@@ -2063,7 +2130,7 @@ def import_sharepoint_files():
             }), 400
 
         # Verify tender exists
-        tender = blob_service.get_tender(tender_id)
+        tender = metadata_store.get_tender(tender_id)
         if not tender:
             return jsonify({
                 'success': False,
@@ -2208,6 +2275,23 @@ def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, i
                     uploaded_by='SharePoint Import',
                     source='sharepoint'
                 )
+                try:
+                    metadata_store.upsert_file_record(tender_id, file_metadata)
+                except Exception:
+                    logger.error(
+                        "SharePoint import metadata write failed for %s. Deleting blob for compensation.",
+                        file_metadata.get('path'),
+                        exc_info=True
+                    )
+                    try:
+                        blob_service.delete_file(tender_id, file_metadata.get('path'))
+                    except Exception:
+                        logger.error(
+                            "SharePoint import compensation failed for %s",
+                            file_metadata.get('path'),
+                            exc_info=True
+                        )
+                    raise
 
                 # Increment success count
                 with import_jobs_lock:
@@ -2277,9 +2361,14 @@ def _cleanup_import_job(job_id: str):
 @app.get('/api/health')
 def health_check():
     """Health check endpoint (unauthenticated for monitoring)"""
+    metadata_mode = os.getenv('METADATA_STORE_MODE', 'blob')
+    metadata_health = metadata_store.check_health()
+    status = 'healthy' if metadata_health.get('ok') else 'degraded'
     return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.utcnow().isoformat()
+        'status': status,
+        'timestamp': datetime.utcnow().isoformat(),
+        'metadata_mode': metadata_mode,
+        'metadata': metadata_health
     })
 
 

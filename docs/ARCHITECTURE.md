@@ -1,5 +1,16 @@
 # SharePoint FilePicker Architecture
 
+## Metadata Storage Architecture (2026 Update)
+
+- Blob Storage remains the source of truth for binary file content.
+- Cosmos DB stores all metadata documents (`tender`, `file`, `batch`) in the `metadata` container (partition key `/tender_id`).
+- Cosmos DB stores webhook/admin lookup records in `batch-reference-index` (partition key `/reference`).
+- Backend metadata access is routed through a store abstraction:
+  - `blob` mode: blob metadata adapter only
+  - `dual` mode: Cosmos primary reads/writes plus blob writes and optional blob fallback reads
+  - `cosmos` mode: Cosmos only
+- Public REST APIs remain unchanged; migration affects backend internals only.
+
 ## 🏗️ System Architecture
 
 ```

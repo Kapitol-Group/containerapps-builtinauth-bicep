@@ -9,10 +9,10 @@ hooks:
   postprovision:
     posix:
       shell: sh
-      run: ./infra/hooks/postprovision.sh
+      run: bash ./infra/hooks/postprovision.sh
     windows:
       shell: pwsh
-      run: ./infra/hooks/postprovision.sh
+      run: bash ./infra/hooks/postprovision.sh
 services:
   aca:
     project: .
@@ -25,4 +25,3 @@ services:
         - VITE_ENTRA_CLIENT_ID=${VITE_ENTRA_CLIENT_ID}
         - VITE_ENTRA_TENANT_ID=${VITE_ENTRA_TENANT_ID}
         - VITE_SHAREPOINT_BASE_URL=${VITE_SHAREPOINT_BASE_URL}
-

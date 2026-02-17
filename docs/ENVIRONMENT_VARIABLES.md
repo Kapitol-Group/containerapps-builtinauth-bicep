@@ -18,6 +18,36 @@ This document describes all environment variables used by the Tender Automation 
 - In local development, uses `DefaultAzureCredential` (Azure CLI, VS Code, etc.)
 - The backend will warn on startup if `AZURE_STORAGE_ACCOUNT_NAME` is not set
 
+### Cosmos Metadata Configuration
+
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `COSMOS_ACCOUNT_ENDPOINT` | Cosmos DB account endpoint URL | Yes* | - | `https://myaccount.documents.azure.com:443/` |
+| `COSMOS_DATABASE_NAME` | Cosmos SQL database used for metadata | No | `kapitol-tender-automation` | `kapitol-tender-automation` |
+| `COSMOS_METADATA_CONTAINER_NAME` | Container for tender/file/batch docs | No | `metadata` | `metadata` |
+| `COSMOS_BATCH_REFERENCE_CONTAINER_NAME` | Container for batch reference index docs | No | `batch-reference-index` | `batch-reference-index` |
+| `METADATA_STORE_MODE` | Metadata storage mode (`blob`, `dual`, `cosmos`) | No | `blob` | `dual` |
+| `METADATA_READ_FALLBACK` | Allow fallback reads to blob in dual mode | No | `true` | `false` |
+
+**Notes:**
+- \* Required when `METADATA_STORE_MODE` is `dual` or `cosmos`
+- Authentication uses managed identity (`DefaultAzureCredential`) in Azure
+- Recommended rollout sequence is `blob -> dual -> cosmos`
+
+### AZD Hook Controls
+
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `AUTO_RUN_COSMOS_BACKFILL` | Run automatic backfill + validation in `postprovision` hook | No | `true` | `false` |
+
+**Notes:**
+- This flag is read by `infra/hooks/postprovision.sh`
+- When `true`, the hook runs:
+  - `python backend/scripts/backfill_metadata_to_cosmos.py --dry-run`
+  - `python backend/scripts/backfill_metadata_to_cosmos.py`
+  - `python backend/scripts/validate_cosmos_backfill.py --sample-size 25 --max-mismatches 0`
+- Hook logs are written to `.azure/logs/postprovision-cosmos-migration-latest.log`
+
 ### UiPath Integration Configuration
 
 | Variable | Description | Required | Default | Example |
@@ -117,6 +147,12 @@ Environment variables are automatically configured via Bicep templates:
 **Backend Container App (`infra/aca.bicep`):**
 - ✅ `AZURE_STORAGE_ACCOUNT_NAME` - Auto-populated from storage module
 - ✅ `AZURE_STORAGE_CONTAINER_NAME` - Set to `tender-documents`
+- ✅ `COSMOS_ACCOUNT_ENDPOINT` - Auto-populated from Cosmos module
+- ✅ `COSMOS_DATABASE_NAME` - Defaults to `kapitol-tender-automation`
+- ✅ `COSMOS_METADATA_CONTAINER_NAME` - Defaults to `metadata`
+- ✅ `COSMOS_BATCH_REFERENCE_CONTAINER_NAME` - Defaults to `batch-reference-index`
+- ✅ `METADATA_STORE_MODE` - Defaults to `blob`
+- ✅ `METADATA_READ_FALLBACK` - Defaults to `true`
 - ✅ `UIPATH_MOCK_MODE` - Set to `true` by default
 - ⚠️ `UIPATH_TENANT_NAME`, `UIPATH_APP_ID`, `UIPATH_API_KEY`, `UIPATH_FOLDER_ID`, `UIPATH_QUEUE_NAME` - Must be configured via `azd env set`
 - ⚠️ `DATA_FABRIC_API_URL`, `DATA_FABRIC_API_KEY` - Must be configured via `azd env set`
@@ -138,6 +174,24 @@ azd deploy
 ```bash
 azd env set DATA_FABRIC_API_URL "https://your-datafabric-url"
 azd env set DATA_FABRIC_API_KEY "your-api-key"
+azd deploy
+```
+
+**To configure metadata mode rollout:**
+```bash
+# Phase 1
+azd env set METADATA_STORE_MODE "blob"
+azd env set METADATA_READ_FALLBACK "true"
+azd deploy
+
+# Phase 2
+azd env set METADATA_STORE_MODE "dual"
+azd env set METADATA_READ_FALLBACK "true"
+azd deploy
+
+# Phase 3
+azd env set METADATA_STORE_MODE "cosmos"
+azd env set METADATA_READ_FALLBACK "false"
 azd deploy
 ```
 
@@ -172,6 +226,12 @@ azd deploy
 - Expected if Entity Store integration not set up
 - Configure `DATA_FABRIC_API_URL` and `DATA_FABRIC_API_KEY` via `azd env set` and redeploy
 - System will still work in mock mode without Entity Store
+
+### Issue: "COSMOS_ACCOUNT_ENDPOINT not set"
+**Solution:**
+- Ensure the Cosmos module is deployed via `infra/main.bicep`
+- Verify backend container app has `COSMOS_ACCOUNT_ENDPOINT` configured
+- If running local in `dual` or `cosmos` mode, export `COSMOS_ACCOUNT_ENDPOINT`
 
 ### Issue: Frontend can't connect to backend
 **Solution:**
@@ -221,13 +281,15 @@ fetch('/api/health').then(r => r.json()).then(console.log)
 
 ---
 
-**Last Updated:** November 2025  
+**Last Updated:** February 2026
 **Related Files:**
 - `infra/aca.bicep` - Backend environment configuration
 - `infra/main.bicep` - Main infrastructure with UiPath parameters
 - `backend/app.py` - Environment variable usage
 - `backend/services/uipath_client.py` - UiPath and Entity Store client
+- `backend/services/cosmos_metadata_store.py` - Cosmos metadata repository
 
 **Related Documentation:**
 - `UIPATH_ENTITY_STORE_INTEGRATION_PLAN.md` - Implementation plan
 - `UIPATH_ENTITY_STORE_IMPLEMENTATION_SUMMARY.md` - Implementation summary
+- `COSMOS_METADATA_MIGRATION.md` - Metadata migration rollout and validation

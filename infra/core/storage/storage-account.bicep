@@ -43,9 +43,9 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01'
   }
 }
 
-resource tendersContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
+resource tenderDocumentsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = {
   parent: blobService
-  name: 'tenders'
+  name: 'tender-documents'
   properties: {
     publicAccess: 'None'
   }
@@ -54,3 +54,4 @@ resource tendersContainer 'Microsoft.Storage/storageAccounts/blobServices/contai
 output id string = storageAccount.id
 output name string = storageAccount.name
 output primaryEndpoints object = storageAccount.properties.primaryEndpoints
+output containerName string = tenderDocumentsContainer.name

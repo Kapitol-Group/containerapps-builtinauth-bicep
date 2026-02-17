@@ -49,6 +49,21 @@
     },
     "uipathQueueName": {
       "value": "${UIPATH_QUEUE_NAME}"
+    },
+    "cosmosDatabaseName": {
+      "value": "${COSMOS_DATABASE_NAME=kapitol-tender-automation}"
+    },
+    "cosmosMetadataContainerName": {
+      "value": "${COSMOS_METADATA_CONTAINER_NAME=metadata}"
+    },
+    "cosmosBatchReferenceContainerName": {
+      "value": "${COSMOS_BATCH_REFERENCE_CONTAINER_NAME=batch-reference-index}"
+    },
+    "metadataStoreMode": {
+      "value": "${METADATA_STORE_MODE=cosmos}"
+    },
+    "metadataReadFallback": {
+      "value": "${METADATA_READ_FALLBACK=true}"
     }
   }
 }
