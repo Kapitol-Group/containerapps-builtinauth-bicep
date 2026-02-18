@@ -26,6 +26,7 @@ param sharePointBaseUrl string = ''
 // Data Fabric configuration parameters
 param dataFabricApiUrl string = ''
 param dataFabricApiKey string = ''
+param webhookBatchCompleteKey string = ''
 
 // Batch progress polling configuration
 param batchProgressPollingInterval string = '30000'
@@ -147,7 +148,16 @@ var dataFabricApiKeyEnvVar = !empty(dataFabricApiKey)
     ]
   : []
 
-var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar, dataFabricApiKeyEnvVar)
+var webhookBatchCompleteKeyEnvVar = !empty(webhookBatchCompleteKey)
+  ? [
+      {
+        name: 'WEBHOOK_BATCH_COMPLETE_KEY'
+        secretRef: 'webhook-batch-complete-key'
+      }
+    ]
+  : []
+
+var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar, dataFabricApiKeyEnvVar, webhookBatchCompleteKeyEnvVar)
 
 // Build secrets array conditionally
 var baseSecrets = [
@@ -175,7 +185,16 @@ var dataFabricApiKeySecret = !empty(dataFabricApiKey)
     ]
   : []
 
-var allSecrets = concat(baseSecrets, uipathApiKeySecret, dataFabricApiKeySecret)
+var webhookBatchCompleteKeySecret = !empty(webhookBatchCompleteKey)
+  ? [
+      {
+        name: 'webhook-batch-complete-key'
+        value: webhookBatchCompleteKey
+      }
+    ]
+  : []
+
+var allSecrets = concat(baseSecrets, uipathApiKeySecret, dataFabricApiKeySecret, webhookBatchCompleteKeySecret)
 
 module app 'core/host/container-app-upsert.bicep' = {
   name: '${serviceName}-container-app-module'

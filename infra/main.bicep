@@ -36,6 +36,10 @@ param dataFabricApiUrl string = ''
 @description('Data Fabric API Key')
 param dataFabricApiKey string = ''
 
+@secure()
+@description('Shared secret key required by /api/webhooks/batch-complete header validation')
+param webhookBatchCompleteKey string = ''
+
 @description('Batch progress polling interval in milliseconds (default: 30000 = 30 seconds)')
 param batchProgressPollingInterval string = '30000'
 
@@ -163,6 +167,7 @@ module aca 'aca.bicep' = {
     // Data Fabric configuration
     dataFabricApiUrl: dataFabricApiUrl
     dataFabricApiKey: dataFabricApiKey
+    webhookBatchCompleteKey: webhookBatchCompleteKey
     // Batch progress polling configuration
     batchProgressPollingInterval: batchProgressPollingInterval
     // Cosmos metadata configuration

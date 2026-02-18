@@ -1,4 +1,5 @@
 import base64
+import hmac
 import json
 import logging
 import os
@@ -91,6 +92,8 @@ BATCH_SUBMISSION_LOCK_SECONDS = int(
 BATCH_PENDING_RETRY_MIN_AGE_MINUTES = int(
     os.getenv('BATCH_PENDING_RETRY_MIN_AGE_MINUTES', '5'))
 BATCH_MAX_FAILED_ATTEMPTS = int(os.getenv('BATCH_MAX_FAILED_ATTEMPTS', '3'))
+WEBHOOK_BATCH_COMPLETE_KEY_HEADER = 'X-Webhook-Key'
+WEBHOOK_BATCH_COMPLETE_KEY = os.getenv('WEBHOOK_BATCH_COMPLETE_KEY', '').strip()
 
 
 def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
@@ -1771,10 +1774,26 @@ def batch_complete_webhook():
         "status": "completed" | "failed",
         "completed_at": "ISO-8601 datetime"
     }
-
-    TODO: implement signature validation).
     """
     try:
+        if not WEBHOOK_BATCH_COMPLETE_KEY:
+            logger.error(
+                "Webhook %s is not configured; set WEBHOOK_BATCH_COMPLETE_KEY to enable this endpoint safely",
+                WEBHOOK_BATCH_COMPLETE_KEY_HEADER
+            )
+            return jsonify({
+                'success': False,
+                'error': 'Webhook authentication not configured'
+            }), 503
+
+        provided_key = request.headers.get(WEBHOOK_BATCH_COMPLETE_KEY_HEADER, '')
+        if not provided_key or not hmac.compare_digest(provided_key, WEBHOOK_BATCH_COMPLETE_KEY):
+            logger.warning("Rejected batch-complete webhook due to invalid key header")
+            return jsonify({
+                'success': False,
+                'error': 'Invalid webhook key'
+            }), 401
+
         data = request.json
 
         if not data:

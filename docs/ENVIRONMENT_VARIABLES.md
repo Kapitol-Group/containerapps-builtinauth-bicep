@@ -78,6 +78,17 @@ This document describes all environment variables used by the Tender Automation 
 - When missing, Entity Store features disabled but mock mode still works
 - API key stored as **secret** in Azure Container Apps
 
+### Webhook Security Configuration
+
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `WEBHOOK_BATCH_COMPLETE_KEY` | Shared secret validated against `X-Webhook-Key` on `/api/webhooks/batch-complete` | Yes*** | - | `********************************` |
+
+**Notes:**
+- \*** Required when using `/api/webhooks/batch-complete`
+- If unset, `/api/webhooks/batch-complete` returns `503` to avoid unauthenticated webhook processing
+- Value is injected as a **secret** in Azure Container Apps
+
 ### CORS Configuration
 
 | Variable | Description | Required | Default | Example |
@@ -156,6 +167,7 @@ Environment variables are automatically configured via Bicep templates:
 - ✅ `UIPATH_MOCK_MODE` - Set to `true` by default
 - ⚠️ `UIPATH_TENANT_NAME`, `UIPATH_APP_ID`, `UIPATH_API_KEY`, `UIPATH_FOLDER_ID`, `UIPATH_QUEUE_NAME` - Must be configured via `azd env set`
 - ⚠️ `DATA_FABRIC_API_URL`, `DATA_FABRIC_API_KEY` - Must be configured via `azd env set`
+- ⚠️ `WEBHOOK_BATCH_COMPLETE_KEY` - Must be configured via `azd env set` if webhook callbacks are enabled
 
 **To configure UiPath in production:**
 ```bash
@@ -174,6 +186,12 @@ azd deploy
 ```bash
 azd env set DATA_FABRIC_API_URL "https://your-datafabric-url"
 azd env set DATA_FABRIC_API_KEY "your-api-key"
+azd deploy
+```
+
+**To configure webhook authentication:**
+```bash
+azd env set WEBHOOK_BATCH_COMPLETE_KEY "your-shared-webhook-secret"
 azd deploy
 ```
 
@@ -199,6 +217,7 @@ azd deploy
 
 ### ✅ DO:
 - Store sensitive values (`UIPATH_API_KEY`) as **secrets** in Container Apps
+- Store sensitive values (`UIPATH_API_KEY`, `DATA_FABRIC_API_KEY`, `WEBHOOK_BATCH_COMPLETE_KEY`) as **secrets** in Container Apps
 - Use **Managed Identity** for Azure Storage access (no connection strings)
 - Set specific CORS origins in production
 - Use environment-specific values (dev/staging/prod)

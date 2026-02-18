@@ -35,6 +35,9 @@
     "dataFabricApiKey": {
       "value": "${DATA_FABRIC_API_KEY}"
     },
+    "webhookBatchCompleteKey": {
+      "value": "${WEBHOOK_BATCH_COMPLETE_KEY}"
+    },
     "uipathTenantName": {
       "value": "${UIPATH_TENANT_NAME}"
     },

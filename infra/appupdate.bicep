@@ -30,6 +30,9 @@ resource auth 'Microsoft.App/containerApps/authConfigs@2024-10-02-preview' = {
     globalValidation: {
       redirectToProvider: 'azureactivedirectory'
       unauthenticatedClientAction: 'RedirectToLoginPage'
+      excludedPaths: [
+        '/api/webhooks/batch-complete'
+      ]
     }
     identityProviders: {
       azureActiveDirectory: {
