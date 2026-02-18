@@ -86,8 +86,10 @@ JOB_CLEANUP_SECONDS = 3600
 
 # Keep stored batch error text compact to avoid blob metadata overflow.
 MAX_BATCH_ERROR_CHARS = int(os.getenv('BATCH_METADATA_ERROR_MAX_CHARS', '512'))
-BATCH_SUBMISSION_LOCK_SECONDS = int(os.getenv('BATCH_SUBMISSION_LOCK_SECONDS', '900'))
-BATCH_PENDING_RETRY_MIN_AGE_MINUTES = int(os.getenv('BATCH_PENDING_RETRY_MIN_AGE_MINUTES', '5'))
+BATCH_SUBMISSION_LOCK_SECONDS = int(
+    os.getenv('BATCH_SUBMISSION_LOCK_SECONDS', '900'))
+BATCH_PENDING_RETRY_MIN_AGE_MINUTES = int(
+    os.getenv('BATCH_PENDING_RETRY_MIN_AGE_MINUTES', '5'))
 BATCH_MAX_FAILED_ATTEMPTS = int(os.getenv('BATCH_MAX_FAILED_ATTEMPTS', '3'))
 
 
@@ -308,12 +310,14 @@ def _process_uipath_submission_async(
     Updates batch metadata with success/failure details.
     """
     try:
-        logger.info("[Background] Starting UiPath submission for batch %s", batch_id)
+        logger.info(
+            "[Background] Starting UiPath submission for batch %s", batch_id)
 
         batch = None
         if claim_before_submit:
             owner = claim_owner or _build_submission_owner(attempt_source)
-            allowed = claim_allowed_statuses or ['pending', 'failed', 'submitting']
+            allowed = claim_allowed_statuses or [
+                'pending', 'failed', 'submitting']
             batch = metadata_store.claim_batch_for_submission(
                 tender_id=tender_id,
                 batch_id=batch_id,
@@ -332,7 +336,8 @@ def _process_uipath_submission_async(
         else:
             batch = metadata_store.get_batch(tender_id, batch_id)
             if not batch:
-                logger.warning("[Background] Batch %s not found during submission", batch_id)
+                logger.warning(
+                    "[Background] Batch %s not found during submission", batch_id)
                 return
 
         attempts = batch.get('submission_attempts', []) if batch else []
@@ -371,7 +376,8 @@ def _process_uipath_submission_async(
             'submission_locked_until': ''
         })
         if not updated:
-            raise RuntimeError("Batch metadata update returned no result after UiPath submission")
+            raise RuntimeError(
+                "Batch metadata update returned no result after UiPath submission")
 
     except ValueError as user_error:
         logger.error(
@@ -450,7 +456,8 @@ def retry_stuck_batches():
 
                         allow_statuses = None
                         if status == 'pending':
-                            submitted_at = _parse_iso_datetime(batch.get('submitted_at'))
+                            submitted_at = _parse_iso_datetime(
+                                batch.get('submitted_at'))
                             if not submitted_at:
                                 continue
                             age = datetime.utcnow() - submitted_at
@@ -459,7 +466,8 @@ def retry_stuck_batches():
                             allow_statuses = ['pending']
                             stuck_count += 1
                         elif status == 'submitting':
-                            lock_until = _parse_iso_datetime(batch.get('submission_locked_until'))
+                            lock_until = _parse_iso_datetime(
+                                batch.get('submission_locked_until'))
                             if lock_until and lock_until > datetime.utcnow():
                                 continue
                             allow_statuses = ['submitting']
@@ -487,10 +495,13 @@ def retry_stuck_batches():
                             batch_id=batch_id,
                             file_paths=claimed.get('file_paths', []),
                             category=claimed.get('discipline') or 'Unknown',
-                            title_block_coords=claimed.get('title_block_coords', {}),
+                            title_block_coords=claimed.get(
+                                'title_block_coords', {}),
                             user_email=submitted_by,
-                            sharepoint_folder_path=claimed.get('sharepoint_folder_path', ''),
-                            output_folder_path=claimed.get('output_folder_path', ''),
+                            sharepoint_folder_path=claimed.get(
+                                'sharepoint_folder_path', ''),
+                            output_folder_path=claimed.get(
+                                'output_folder_path', ''),
                             folder_list=claimed.get('folder_list', []),
                             claim_before_submit=False,
                             attempt_source='auto-retry',
@@ -513,7 +524,8 @@ def retry_stuck_batches():
                 logger.debug("[Retry Worker] No stuck batches found")
 
         except Exception as e:
-            logger.error("[Retry Worker] Error in retry loop: %s", e, exc_info=True)
+            logger.error(
+                "[Retry Worker] Error in retry loop: %s", e, exc_info=True)
 
 
 # Start retry worker thread
@@ -635,7 +647,8 @@ def upload_file(tender_id: str):
             )
             try:
                 blob_service.delete_file(tender_id, file_info.get('path'))
-                logger.warning("Compensation succeeded for file %s", file_info.get('path'))
+                logger.warning(
+                    "Compensation succeeded for file %s", file_info.get('path'))
             except Exception as rollback_error:
                 logger.error(
                     "Compensation failed for uploaded file %s: %s",
@@ -827,7 +840,8 @@ def _process_bulk_upload(job_id: str, tender_id: str, file_items: list,
                         exc_info=True
                     )
                     try:
-                        blob_service.delete_file(tender_id, uploaded_info.get('path'))
+                        blob_service.delete_file(
+                            tender_id, uploaded_info.get('path'))
                     except Exception:
                         logger.error(
                             "Bulk upload compensation failed for %s",
@@ -1050,7 +1064,8 @@ def complete_chunked_upload(tender_id: str, upload_id: str):
             )
             try:
                 blob_service.delete_file(tender_id, blob_name)
-                logger.warning("Compensation succeeded for chunked file %s", blob_name)
+                logger.warning(
+                    "Compensation succeeded for chunked file %s", blob_name)
             except Exception as rollback_error:
                 logger.error(
                     "Compensation failed for chunked file %s: %s",
@@ -1201,7 +1216,8 @@ def delete_file(tender_id: str, file_path: str):
     try:
         logger.info(f"Deleting file {file_path} from tender {tender_id}")
         existing_metadata = metadata_store.get_file(tender_id, file_path)
-        metadata_deleted = metadata_store.delete_file_metadata(tender_id, file_path)
+        metadata_deleted = metadata_store.delete_file_metadata(
+            tender_id, file_path)
         try:
             blob_service.delete_file(tender_id, file_path)
         except ResourceNotFoundError:
@@ -1213,7 +1229,8 @@ def delete_file(tender_id: str, file_path: str):
         except Exception:
             if metadata_deleted and existing_metadata:
                 try:
-                    metadata_store.restore_file_record(tender_id, existing_metadata)
+                    metadata_store.restore_file_record(
+                        tender_id, existing_metadata)
                     logger.warning(
                         "Blob delete failed, restored metadata for %s", file_path)
                 except Exception:
@@ -1549,7 +1566,8 @@ def retry_batch(tender_id: str, batch_id: str):
             }), 400
 
         if status == 'submitting':
-            lock_until = _parse_iso_datetime(batch.get('submission_locked_until'))
+            lock_until = _parse_iso_datetime(
+                batch.get('submission_locked_until'))
             if lock_until and lock_until > datetime.utcnow():
                 return jsonify({
                     'success': False,
@@ -1742,20 +1760,19 @@ def get_batch_progress(tender_id: str, batch_id: str):
         }), 500
 
 
-@app.post('/api/webhooks/uipath/batch-complete')
-def uipath_batch_complete_webhook():
+@app.post('/api/webhooks/batch-complete')
+def batch_complete_webhook():
     """
-    Webhook endpoint for UiPath to notify when a batch is complete
+    Webhook endpoint to notify when a batch is complete
 
     Expected payload:
     {
-        "reference": "cuid-reference-string",
+        "reference": "batch-reference-string",
         "status": "completed" | "failed",
         "completed_at": "ISO-8601 datetime"
     }
 
-    Note: This endpoint does NOT require authentication since it's called by UiPath.
-    Security is handled via UiPath's webhook signing (TODO: implement signature validation).
+    TODO: implement signature validation).
     """
     try:
         data = request.json
@@ -2334,7 +2351,8 @@ def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, i
                         exc_info=True
                     )
                     try:
-                        blob_service.delete_file(tender_id, file_metadata.get('path'))
+                        blob_service.delete_file(
+                            tender_id, file_metadata.get('path'))
                     except Exception:
                         logger.error(
                             "SharePoint import compensation failed for %s",
