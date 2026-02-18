@@ -84,6 +84,22 @@ python scripts/validate_cosmos_backfill.py --tender-id <tender-id>
 
 Non-zero exit code indicates mismatch threshold exceeded.
 
+## Reconcile File Counts
+
+If a tender's `file_count` drifts from the actual number of Cosmos file documents (for example after historical concurrent operations), run:
+
+```bash
+python scripts/reconcile_cosmos_file_counts.py --dry-run
+python scripts/reconcile_cosmos_file_counts.py --tender-id <tender-id>
+python scripts/reconcile_cosmos_file_counts.py
+```
+
+The script compares each tender's stored `file_count` with:
+
+`SELECT VALUE COUNT(1) FROM c WHERE c.tender_id=@tender_id AND c.doc_type='file'`
+
+and updates mismatches (unless `--dry-run` is used).
+
 ## Rollout Sequence
 
 1. Deploy with:

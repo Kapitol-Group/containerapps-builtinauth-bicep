@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from typing import Optional
 
+from azure.core.exceptions import ResourceNotFoundError
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 from werkzeug.datastructures import FileStorage
@@ -1217,11 +1218,17 @@ def delete_file(tender_id: str, file_path: str):
     try:
         logger.info(f"Deleting file {file_path} from tender {tender_id}")
         existing_metadata = metadata_store.get_file(tender_id, file_path)
-        metadata_store.delete_file_metadata(tender_id, file_path)
+        metadata_deleted = metadata_store.delete_file_metadata(tender_id, file_path)
         try:
             blob_service.delete_file(tender_id, file_path)
+        except ResourceNotFoundError:
+            logger.info(
+                "Blob already absent for tender_id=%s file_path=%s during delete",
+                tender_id,
+                file_path,
+            )
         except Exception:
-            if existing_metadata:
+            if metadata_deleted and existing_metadata:
                 try:
                     metadata_store.restore_file_record(tender_id, existing_metadata)
                     logger.warning(

@@ -3,11 +3,14 @@ Cosmos DB metadata store implementation.
 """
 import hashlib
 import logging
+import random
+import time
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
+from azure.core import MatchConditions
 from azure.identity import DefaultAzureCredential
 
 from services.metadata_store import MetadataStore
@@ -15,6 +18,8 @@ from services.metadata_store import MetadataStore
 logger = logging.getLogger(__name__)
 
 VALID_BATCH_STATUSES = {'pending', 'running', 'completed', 'failed'}
+FILE_COUNT_RETRY_LIMIT = 3
+FILE_COUNT_RETRY_BASE_SECONDS = 0.05
 
 
 class CosmosMetadataStore(MetadataStore):
@@ -198,18 +203,181 @@ class CosmosMetadataStore(MetadataStore):
             'folder_list': doc.get('folder_list', []),
         }
 
-    def _update_tender_file_count(self, tender_id: str, delta: int = 0):
-        tender_doc = self._read_item(
-            self.metadata_container,
-            self._tender_doc_id(tender_id),
-            tender_id
+    @staticmethod
+    def _status_code(exc: Exception) -> Optional[int]:
+        status_code = getattr(exc, 'status_code', None)
+        try:
+            return int(status_code) if status_code is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_conflict_status(status_code: Optional[int]) -> bool:
+        return status_code in {409, 412}
+
+    @staticmethod
+    def _is_atomic_batch_unsupported(exc: Exception) -> bool:
+        status_code = CosmosMetadataStore._status_code(exc)
+        if status_code != 400:
+            return False
+        message = str(exc).lower()
+        return 'patch' in message and 'batch' in message
+
+    @staticmethod
+    def _sleep_before_retry(attempt: int):
+        base = FILE_COUNT_RETRY_BASE_SECONDS * max(1, attempt)
+        time.sleep(base + random.uniform(0.0, FILE_COUNT_RETRY_BASE_SECONDS))
+
+    def _patch_tender_count_operation(self, delta: int) -> List[Dict[str, Any]]:
+        return [
+            {'op': 'incr', 'path': '/file_count', 'value': delta},
+            {'op': 'set', 'path': '/updated_at', 'value': self._utc_now()},
+        ]
+
+    def _apply_tender_count_delta_with_optimistic_retry(
+        self,
+        tender_id: str,
+        delta: int,
+        file_path: str,
+        operation: str,
+    ) -> bool:
+        for attempt in range(1, FILE_COUNT_RETRY_LIMIT + 1):
+            tender_doc = self._read_item(
+                self.metadata_container,
+                self._tender_doc_id(tender_id),
+                tender_id
+            )
+            if not tender_doc:
+                return False
+            current_count = int(tender_doc.get('file_count', 0))
+            tender_doc['file_count'] = max(0, current_count + delta)
+            tender_doc['updated_at'] = self._utc_now()
+
+            try:
+                self.metadata_container.replace_item(
+                    item=tender_doc['id'],
+                    body=tender_doc,
+                    etag=tender_doc.get('_etag'),
+                    match_condition=MatchConditions.IfNotModified
+                )
+                return True
+            except Exception as exc:
+                status_code = self._status_code(exc)
+                if self._is_conflict_status(status_code):
+                    logger.info(
+                        "file_count_atomic_update_retry tender_id=%s file_path=%s operation=%s attempt=%s status_code=%s",
+                        tender_id,
+                        file_path,
+                        operation,
+                        attempt,
+                        status_code,
+                    )
+                    if attempt < FILE_COUNT_RETRY_LIMIT:
+                        self._sleep_before_retry(attempt)
+                        continue
+                    logger.warning(
+                        "file_count_atomic_update_conflict tender_id=%s file_path=%s operation=%s attempts=%s outcome=failed",
+                        tender_id,
+                        file_path,
+                        operation,
+                        FILE_COUNT_RETRY_LIMIT,
+                    )
+                raise
+        return False
+
+    def _create_file_and_increment_count_optimistic(self, tender_id: str, file_doc: Dict[str, Any]):
+        file_path = file_doc.get('path', '')
+        try:
+            self.metadata_container.create_item(file_doc)
+        except Exception as exc:
+            status_code = self._status_code(exc)
+            if status_code == 409:
+                self.metadata_container.upsert_item(file_doc)
+                return
+            raise
+
+        try:
+            if not self._apply_tender_count_delta_with_optimistic_retry(
+                tender_id=tender_id,
+                delta=1,
+                file_path=file_path,
+                operation='create',
+            ):
+                raise RuntimeError("Tender record not found while updating file_count")
+        except Exception:
+            try:
+                self.metadata_container.delete_item(item=file_doc['id'], partition_key=tender_id)
+            except Exception:
+                logger.error(
+                    "Rollback failed after optimistic file_count increment failure for tender_id=%s file_path=%s",
+                    tender_id,
+                    file_path,
+                    exc_info=True,
+                )
+            raise
+
+    def _delete_file_and_decrement_count_optimistic(self, tender_id: str, file_doc: Dict[str, Any]):
+        file_path = file_doc.get('path', '')
+        file_doc_id = file_doc['id']
+        file_etag = file_doc.get('_etag')
+        try:
+            self.metadata_container.delete_item(
+                item=file_doc_id,
+                partition_key=tender_id,
+                etag=file_etag,
+                match_condition=MatchConditions.IfNotModified,
+            )
+        except exceptions.CosmosResourceNotFoundError:
+            return False
+
+        try:
+            if not self._apply_tender_count_delta_with_optimistic_retry(
+                tender_id=tender_id,
+                delta=-1,
+                file_path=file_path,
+                operation='delete',
+            ):
+                raise RuntimeError("Tender record not found while updating file_count")
+        except Exception:
+            restore_doc = dict(file_doc)
+            restore_doc.pop('_etag', None)
+            try:
+                self.metadata_container.upsert_item(restore_doc)
+            except Exception:
+                logger.error(
+                    "Rollback failed after optimistic file_count decrement failure for tender_id=%s file_path=%s",
+                    tender_id,
+                    file_path,
+                    exc_info=True,
+                )
+            raise
+        return True
+
+    def _create_file_and_increment_count(self, tender_id: str, file_doc: Dict[str, Any]):
+        batch_operations = [
+            ('create', (file_doc,)),
+            ('patch', (
+                self._tender_doc_id(tender_id),
+                self._patch_tender_count_operation(delta=1),
+            )),
+        ]
+        self.metadata_container.execute_item_batch(
+            batch_operations=batch_operations,
+            partition_key=tender_id,
         )
-        if not tender_doc:
-            return
-        current = int(tender_doc.get('file_count', 0))
-        tender_doc['file_count'] = max(0, current + delta)
-        tender_doc['updated_at'] = self._utc_now()
-        self.metadata_container.upsert_item(tender_doc)
+
+    def _delete_file_and_decrement_count(self, tender_id: str, file_doc_id: str, file_etag: Optional[str]):
+        batch_operations = [
+            ('delete', (file_doc_id,), {'if_match_etag': file_etag}),
+            ('patch', (
+                self._tender_doc_id(tender_id),
+                self._patch_tender_count_operation(delta=-1),
+            )),
+        ]
+        self.metadata_container.execute_item_batch(
+            batch_operations=batch_operations,
+            partition_key=tender_id,
+        )
 
     def recompute_tender_file_count(self, tender_id: str) -> int:
         rows = self._query_metadata(
@@ -223,9 +391,17 @@ class CosmosMetadataStore(MetadataStore):
             tender_id
         )
         if tender_doc:
+            previous_count = int(tender_doc.get('file_count', 0))
             tender_doc['file_count'] = count
             tender_doc['updated_at'] = self._utc_now()
             self.metadata_container.upsert_item(tender_doc)
+            if previous_count != count:
+                logger.info(
+                    "file_count_reconciliation_fix tender_id=%s previous_count=%s recomputed_count=%s",
+                    tender_id,
+                    previous_count,
+                    count,
+                )
         return count
 
     def list_tenders(self) -> List[Dict]:
@@ -341,7 +517,6 @@ class CosmosMetadataStore(MetadataStore):
             raise ValueError("File record requires path")
 
         doc_id = self._file_doc_id(file_path)
-        existing = self._read_item(self.metadata_container, doc_id, tender_id)
         doc = {
             'id': doc_id,
             'doc_type': 'file',
@@ -359,10 +534,46 @@ class CosmosMetadataStore(MetadataStore):
             'submitted_at': file_record.get('submitted_at'),
             'updated_at': self._utc_now(),
         }
-        self.metadata_container.upsert_item(doc)
-        if not existing:
-            self._update_tender_file_count(tender_id, delta=1)
-        return self._to_file(doc)
+        for attempt in range(1, FILE_COUNT_RETRY_LIMIT + 1):
+            existing = self._read_item(self.metadata_container, doc_id, tender_id)
+            if existing:
+                self.metadata_container.upsert_item(doc)
+                return self._to_file(doc)
+
+            try:
+                self._create_file_and_increment_count(tender_id, doc)
+                return self._to_file(doc)
+            except Exception as exc:
+                status_code = self._status_code(exc)
+                if self._is_atomic_batch_unsupported(exc):
+                    logger.warning(
+                        "Transactional batch patch unsupported for tender_id=%s file_path=%s. Falling back to optimistic concurrency.",
+                        tender_id,
+                        file_path,
+                    )
+                    self._create_file_and_increment_count_optimistic(tender_id, doc)
+                    return self._to_file(doc)
+
+                if self._is_conflict_status(status_code):
+                    logger.info(
+                        "file_count_atomic_update_retry tender_id=%s file_path=%s operation=create attempt=%s status_code=%s",
+                        tender_id,
+                        file_path,
+                        attempt,
+                        status_code,
+                    )
+                    if attempt < FILE_COUNT_RETRY_LIMIT:
+                        self._sleep_before_retry(attempt)
+                        continue
+                    logger.warning(
+                        "file_count_atomic_update_conflict tender_id=%s file_path=%s operation=create attempts=%s outcome=failed",
+                        tender_id,
+                        file_path,
+                        FILE_COUNT_RETRY_LIMIT,
+                    )
+                raise
+
+        raise RuntimeError(f"Failed to upsert file metadata for {file_path}")
 
     def restore_file_record(self, tender_id: str, file_record: Dict) -> Dict:
         return self.upsert_file_record(tender_id, file_record)
@@ -383,12 +594,52 @@ class CosmosMetadataStore(MetadataStore):
 
     def delete_file_metadata(self, tender_id: str, file_path: str) -> bool:
         doc_id = self._file_doc_id(file_path)
-        try:
-            self.metadata_container.delete_item(item=doc_id, partition_key=tender_id)
-            self._update_tender_file_count(tender_id, delta=-1)
-            return True
-        except exceptions.CosmosResourceNotFoundError:
-            return False
+        for attempt in range(1, FILE_COUNT_RETRY_LIMIT + 1):
+            existing = self._read_item(self.metadata_container, doc_id, tender_id)
+            if not existing:
+                return False
+
+            try:
+                self._delete_file_and_decrement_count(
+                    tender_id=tender_id,
+                    file_doc_id=doc_id,
+                    file_etag=existing.get('_etag'),
+                )
+                return True
+            except Exception as exc:
+                status_code = self._status_code(exc)
+                if self._is_atomic_batch_unsupported(exc):
+                    logger.warning(
+                        "Transactional batch patch unsupported for tender_id=%s file_path=%s. Falling back to optimistic concurrency.",
+                        tender_id,
+                        file_path,
+                    )
+                    return self._delete_file_and_decrement_count_optimistic(tender_id, existing)
+
+                if self._is_conflict_status(status_code):
+                    logger.info(
+                        "file_count_atomic_update_retry tender_id=%s file_path=%s operation=delete attempt=%s status_code=%s",
+                        tender_id,
+                        file_path,
+                        attempt,
+                        status_code,
+                    )
+                    if attempt < FILE_COUNT_RETRY_LIMIT:
+                        self._sleep_before_retry(attempt)
+                        continue
+
+                    latest = self._read_item(self.metadata_container, doc_id, tender_id)
+                    if not latest:
+                        return False
+                    logger.warning(
+                        "file_count_atomic_update_conflict tender_id=%s file_path=%s operation=delete attempts=%s outcome=failed",
+                        tender_id,
+                        file_path,
+                        FILE_COUNT_RETRY_LIMIT,
+                    )
+                raise
+
+        return False
 
     def create_batch(self, tender_id: str, batch_name: str, discipline: str,
                      file_paths: List[str], title_block_coords: Dict,
