@@ -6,7 +6,7 @@ import logging
 import random
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from azure.cosmos import CosmosClient, PartitionKey, exceptions
@@ -17,7 +17,7 @@ from services.metadata_store import MetadataStore
 
 logger = logging.getLogger(__name__)
 
-VALID_BATCH_STATUSES = {'pending', 'running', 'completed', 'failed'}
+VALID_BATCH_STATUSES = {'pending', 'submitting', 'running', 'completed', 'failed'}
 FILE_COUNT_RETRY_LIMIT = 3
 FILE_COUNT_RETRY_BASE_SECONDS = 0.05
 
@@ -198,6 +198,8 @@ class CosmosMetadataStore(MetadataStore):
             'uipath_reference': doc.get('uipath_reference', ''),
             'uipath_submission_id': doc.get('uipath_submission_id', ''),
             'uipath_project_id': doc.get('uipath_project_id', ''),
+            'submission_owner': doc.get('submission_owner', ''),
+            'submission_locked_until': doc.get('submission_locked_until', ''),
             'sharepoint_folder_path': doc.get('sharepoint_folder_path', ''),
             'output_folder_path': doc.get('output_folder_path', ''),
             'folder_list': doc.get('folder_list', []),
@@ -222,6 +224,15 @@ class CosmosMetadataStore(MetadataStore):
             return False
         message = str(exc).lower()
         return 'patch' in message and 'batch' in message
+
+    @staticmethod
+    def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _sleep_before_retry(attempt: int):
@@ -666,6 +677,8 @@ class CosmosMetadataStore(MetadataStore):
             'uipath_reference': '',
             'uipath_submission_id': '',
             'uipath_project_id': '',
+            'submission_owner': '',
+            'submission_locked_until': '',
             'sharepoint_folder_path': sharepoint_folder_path or '',
             'output_folder_path': output_folder_path or '',
             'folder_list': folder_list or [],
@@ -697,6 +710,8 @@ class CosmosMetadataStore(MetadataStore):
             'uipath_reference': batch_record.get('uipath_reference', existing_doc.get('uipath_reference', '')),
             'uipath_submission_id': batch_record.get('uipath_submission_id', existing_doc.get('uipath_submission_id', '')),
             'uipath_project_id': batch_record.get('uipath_project_id', existing_doc.get('uipath_project_id', '')),
+            'submission_owner': batch_record.get('submission_owner', existing_doc.get('submission_owner', '')),
+            'submission_locked_until': batch_record.get('submission_locked_until', existing_doc.get('submission_locked_until', '')),
             'sharepoint_folder_path': batch_record.get('sharepoint_folder_path', existing_doc.get('sharepoint_folder_path', '')),
             'output_folder_path': batch_record.get('output_folder_path', existing_doc.get('output_folder_path', '')),
             'folder_list': batch_record.get('folder_list', existing_doc.get('folder_list', [])),
@@ -798,6 +813,70 @@ class CosmosMetadataStore(MetadataStore):
             self._upsert_reference_index(new_reference, tender_id, batch_id)
 
         return self._to_batch(doc)
+
+    def claim_batch_for_submission(self, tender_id: str, batch_id: str,
+                                   owner: str, allowed_statuses: List[str],
+                                   lock_seconds: int,
+                                   attempt_source: Optional[str] = None,
+                                   submitted_by: Optional[str] = None) -> Optional[Dict]:
+        allowed = set(allowed_statuses or [])
+        if not allowed:
+            return None
+
+        max_attempts = 5
+        for attempt in range(1, max_attempts + 1):
+            doc = self._read_item(self.metadata_container, self._batch_doc_id(batch_id), tender_id)
+            if not doc:
+                return None
+
+            now = datetime.utcnow()
+            status = doc.get('status', 'pending')
+            existing_owner = doc.get('submission_owner', '')
+            lock_until = self._parse_iso_datetime(doc.get('submission_locked_until', ''))
+            lock_active = bool(status == 'submitting' and lock_until and lock_until > now)
+
+            if status == 'submitting' and lock_active and existing_owner != owner:
+                return None
+
+            can_claim = status in allowed or (status == 'submitting' and (not lock_active or existing_owner == owner))
+            if not can_claim:
+                return None
+
+            submission_attempts = doc.get('submission_attempts')
+            if not isinstance(submission_attempts, list):
+                submission_attempts = []
+            submission_attempts.append({
+                'timestamp': now.isoformat(),
+                'status': 'in_progress',
+                'source': attempt_source or 'unknown'
+            })
+
+            doc['status'] = 'submitting'
+            doc['submission_owner'] = owner
+            doc['submission_locked_until'] = (now + timedelta(seconds=max(30, int(lock_seconds)))).isoformat()
+            doc['submission_attempts'] = submission_attempts
+            doc['updated_at'] = now.isoformat()
+            doc['last_error'] = ''
+            if submitted_by:
+                doc['submitted_by'] = submitted_by
+
+            try:
+                self.metadata_container.replace_item(
+                    item=doc['id'],
+                    body=doc,
+                    etag=doc.get('_etag'),
+                    match_condition=MatchConditions.IfNotModified
+                )
+                return self.get_batch(tender_id, batch_id)
+            except Exception as exc:
+                if self._is_conflict_status(self._status_code(exc)) and attempt < max_attempts:
+                    self._sleep_before_retry(attempt)
+                    continue
+                if self._is_conflict_status(self._status_code(exc)):
+                    return None
+                raise
+
+        return None
 
     def get_batch_files(self, tender_id: str, batch_id: str) -> List[Dict]:
         docs = self._query_metadata(

@@ -105,6 +105,21 @@ class BlobMetadataStore(MetadataStore):
     def update_batch(self, tender_id: str, batch_id: str, updates: Dict) -> Optional[Dict]:
         return self.blob_service.update_batch(tender_id, batch_id, updates)
 
+    def claim_batch_for_submission(self, tender_id: str, batch_id: str,
+                                   owner: str, allowed_statuses: List[str],
+                                   lock_seconds: int,
+                                   attempt_source: Optional[str] = None,
+                                   submitted_by: Optional[str] = None) -> Optional[Dict]:
+        return self.blob_service.claim_batch_for_submission(
+            tender_id=tender_id,
+            batch_id=batch_id,
+            owner=owner,
+            allowed_statuses=allowed_statuses,
+            lock_seconds=lock_seconds,
+            attempt_source=attempt_source,
+            submitted_by=submitted_by,
+        )
+
     def get_batch_files(self, tender_id: str, batch_id: str) -> List[Dict]:
         return self.blob_service.get_batch_files(tender_id, batch_id)
 

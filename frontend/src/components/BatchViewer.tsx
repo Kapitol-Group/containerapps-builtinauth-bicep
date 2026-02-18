@@ -182,6 +182,8 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         switch (status) {
             case 'pending':
                 return 'status-pending';
+            case 'submitting':
+                return 'status-running';
             case 'running':
                 return 'status-running';
             case 'completed':
@@ -193,7 +195,7 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         }
     };
 
-    const canRetry = batch.status === 'failed' || batch.status === 'pending';
+    const canRetry = batch.status === 'failed';
 
     if (loading) {
         return (

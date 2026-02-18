@@ -6,11 +6,12 @@ import logging
 import os
 import uuid
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from io import BytesIO
 
 from azure.storage.blob import BlobServiceClient, BlobBlock, ContainerClient, ContentSettings
+from azure.core import MatchConditions
 from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import ResourceNotFoundError
 from werkzeug.datastructures import FileStorage
@@ -204,6 +205,15 @@ def _enforce_batch_metadata_limits(metadata: Dict) -> Dict:
         )
 
     return safe
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class BlobStorageService:
@@ -752,6 +762,8 @@ class BlobStorageService:
             'uipath_reference': sanitize_metadata_value(str(batch_record.get('uipath_reference', ''))),
             'uipath_submission_id': sanitize_metadata_value(str(batch_record.get('uipath_submission_id', ''))),
             'uipath_project_id': sanitize_metadata_value(str(batch_record.get('uipath_project_id', ''))),
+            'submission_owner': sanitize_metadata_value(str(batch_record.get('submission_owner', ''))),
+            'submission_locked_until': sanitize_metadata_value(str(batch_record.get('submission_locked_until', ''))),
             'sharepoint_folder_path': sanitize_metadata_value(str(batch_record.get('sharepoint_folder_path', ''))),
             'output_folder_path': sanitize_metadata_value(str(batch_record.get('output_folder_path', ''))),
             'folder_list': _json_dumps_compact(_normalize_folder_list(folder_list if isinstance(folder_list, list) else []))
@@ -781,6 +793,8 @@ class BlobStorageService:
             'uipath_reference': batch_record.get('uipath_reference', ''),
             'uipath_submission_id': batch_record.get('uipath_submission_id', ''),
             'uipath_project_id': batch_record.get('uipath_project_id', ''),
+            'submission_owner': batch_record.get('submission_owner', ''),
+            'submission_locked_until': batch_record.get('submission_locked_until', ''),
             'sharepoint_folder_path': batch_record.get('sharepoint_folder_path', ''),
             'output_folder_path': batch_record.get('output_folder_path', ''),
             'folder_list': folder_list,
@@ -837,6 +851,8 @@ class BlobStorageService:
             'uipath_reference': '',
             'uipath_submission_id': '',
             'uipath_project_id': '',
+            'submission_owner': '',
+            'submission_locked_until': '',
             # SharePoint paths and folder list for retry support
             'sharepoint_folder_path': sanitize_metadata_value(sharepoint_folder_path) if sharepoint_folder_path else '',
             'output_folder_path': sanitize_metadata_value(output_folder_path) if output_folder_path else '',
@@ -865,7 +881,9 @@ class BlobStorageService:
             'submitted_at': batch_metadata['submitted_at'],
             'submitted_by': submitted_by,
             'file_count': len(file_paths),
-            'job_id': job_id
+            'job_id': job_id,
+            'submission_owner': '',
+            'submission_locked_until': '',
         }
 
     def list_batches(self, tender_id: str) -> List[Dict]:
@@ -906,6 +924,8 @@ class BlobStorageService:
                         'uipath_reference': blob.metadata.get('uipath_reference', ''),
                         'uipath_submission_id': blob.metadata.get('uipath_submission_id', ''),
                         'uipath_project_id': blob.metadata.get('uipath_project_id', ''),
+                        'submission_owner': blob.metadata.get('submission_owner', ''),
+                        'submission_locked_until': blob.metadata.get('submission_locked_until', ''),
                         'sharepoint_folder_path': blob.metadata.get('sharepoint_folder_path', ''),
                         'output_folder_path': blob.metadata.get('output_folder_path', ''),
                         'folder_list': json.loads(blob.metadata.get('folder_list', '[]'))
@@ -988,6 +1008,8 @@ class BlobStorageService:
                     'uipath_reference': properties.metadata.get('uipath_reference', ''),
                     'uipath_submission_id': properties.metadata.get('uipath_submission_id', ''),
                     'uipath_project_id': properties.metadata.get('uipath_project_id', ''),
+                    'submission_owner': properties.metadata.get('submission_owner', ''),
+                    'submission_locked_until': properties.metadata.get('submission_locked_until', ''),
                     # SharePoint paths and folder list for retry support
                     'sharepoint_folder_path': properties.metadata.get('sharepoint_folder_path', ''),
                     'output_folder_path': properties.metadata.get('output_folder_path', ''),
@@ -1004,7 +1026,7 @@ class BlobStorageService:
         Args:
             tender_id: Tender identifier
             batch_id: Batch identifier
-            status: New status (pending, running, completed, failed)
+            status: New status (pending, submitting, running, completed, failed)
 
         Returns:
             Updated batch information or None if not found
@@ -1013,7 +1035,7 @@ class BlobStorageService:
             return None
 
         # Validate status
-        valid_statuses = ['pending', 'running', 'completed', 'failed']
+        valid_statuses = ['pending', 'submitting', 'running', 'completed', 'failed']
         if status not in valid_statuses:
             raise ValueError(
                 f"Invalid status. Must be one of: {', '.join(valid_statuses)}")
@@ -1119,6 +1141,84 @@ class BlobStorageService:
         except Exception as e:
             logger.error(f"Error updating batch {batch_id}: {e}")
             return None
+
+    def claim_batch_for_submission(self, tender_id: str, batch_id: str,
+                                   owner: str, allowed_statuses: List[str],
+                                   lock_seconds: int,
+                                   attempt_source: Optional[str] = None,
+                                   submitted_by: Optional[str] = None) -> Optional[Dict]:
+        """
+        Atomically claim a batch for UiPath submission using ETag-based optimistic concurrency.
+        """
+        if not self.container_client:
+            return None
+
+        allowed = set(allowed_statuses or [])
+        if not allowed:
+            return None
+
+        batch_blob_name = f"{tender_id}/.batch_{batch_id}"
+        blob_client = self.container_client.get_blob_client(batch_blob_name)
+        max_attempts = 5
+
+        for _ in range(max_attempts):
+            try:
+                properties = blob_client.get_blob_properties()
+            except Exception as e:
+                logger.error(f"Error getting batch {batch_id} for claim: {e}")
+                return None
+
+            metadata = dict(properties.metadata or {})
+            status = metadata.get('status', 'pending')
+            now = datetime.utcnow()
+            existing_owner = metadata.get('submission_owner', '')
+            lock_until = _parse_iso_datetime(metadata.get('submission_locked_until', ''))
+            lock_active = bool(status == 'submitting' and lock_until and lock_until > now)
+
+            if status == 'submitting' and lock_active and existing_owner != owner:
+                return None
+
+            can_claim = status in allowed or (status == 'submitting' and (not lock_active or existing_owner == owner))
+            if not can_claim:
+                return None
+
+            try:
+                submission_attempts = json.loads(metadata.get('submission_attempts', '[]'))
+                if not isinstance(submission_attempts, list):
+                    submission_attempts = []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                submission_attempts = []
+
+            submission_attempts.append({
+                'timestamp': now.isoformat(),
+                'status': 'in_progress',
+                'source': attempt_source or 'unknown'
+            })
+
+            metadata['status'] = 'submitting'
+            metadata['submission_owner'] = sanitize_metadata_value(owner)
+            metadata['submission_locked_until'] = (now + timedelta(seconds=max(30, int(lock_seconds)))).isoformat()
+            metadata['submission_attempts'] = _json_dumps_compact(
+                _normalize_submission_attempts(submission_attempts)
+            )
+            metadata['last_error'] = ''
+            if submitted_by:
+                metadata['submitted_by'] = sanitize_metadata_value(str(submitted_by))
+
+            metadata = _enforce_batch_metadata_limits(metadata)
+
+            try:
+                blob_client.set_blob_metadata(
+                    metadata=metadata,
+                    etag=properties.etag,
+                    match_condition=MatchConditions.IfNotModified
+                )
+                return self.get_batch(tender_id, batch_id)
+            except Exception:
+                # ETag conflict from concurrent claim, retry.
+                continue
+
+        return None
 
     def get_batch_files(self, tender_id: str, batch_id: str) -> List[Dict]:
         """

@@ -86,6 +86,14 @@ class MetadataStore(ABC):
         pass
 
     @abstractmethod
+    def claim_batch_for_submission(self, tender_id: str, batch_id: str,
+                                   owner: str, allowed_statuses: List[str],
+                                   lock_seconds: int,
+                                   attempt_source: Optional[str] = None,
+                                   submitted_by: Optional[str] = None) -> Optional[Dict]:
+        pass
+
+    @abstractmethod
     def get_batch_files(self, tender_id: str, batch_id: str) -> List[Dict]:
         pass
 

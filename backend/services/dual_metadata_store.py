@@ -181,6 +181,28 @@ class DualMetadataStore(MetadataStore):
         self.blob_store.update_batch(tender_id, batch_id, updates)
         return result
 
+    def claim_batch_for_submission(self, tender_id: str, batch_id: str,
+                                   owner: str, allowed_statuses: List[str],
+                                   lock_seconds: int,
+                                   attempt_source: Optional[str] = None,
+                                   submitted_by: Optional[str] = None) -> Optional[Dict]:
+        result = self.cosmos_store.claim_batch_for_submission(
+            tender_id=tender_id,
+            batch_id=batch_id,
+            owner=owner,
+            allowed_statuses=allowed_statuses,
+            lock_seconds=lock_seconds,
+            attempt_source=attempt_source,
+            submitted_by=submitted_by,
+        )
+        if not result:
+            return None
+        try:
+            self.blob_store.upsert_batch_record(tender_id, result)
+        except Exception as exc:
+            logger.error("Dual-write batch claim mirror failed for blob: %s", exc)
+        return result
+
     def get_batch_files(self, tender_id: str, batch_id: str) -> List[Dict]:
         try:
             self._log_primary('get_batch_files')

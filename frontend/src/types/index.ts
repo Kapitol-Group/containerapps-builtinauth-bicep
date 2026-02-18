@@ -45,7 +45,7 @@ export interface Batch {
     destination?: string; // New field: SharePoint destination folder
     file_paths: string[];
     title_block_coords: TitleBlockCoords;
-    status: 'pending' | 'running' | 'completed' | 'failed';
+    status: 'pending' | 'submitting' | 'running' | 'completed' | 'failed';
     submitted_at: string;
     submitted_by: string;
     file_count: number;

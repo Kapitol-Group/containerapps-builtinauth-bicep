@@ -381,6 +381,70 @@ class UiPathClient:
         """
         return Cuid().generate()
 
+    def _find_submission_by_reference(self, reference: str) -> Optional[TenderSubmission]:
+        """
+        Query Entity Store for TenderSubmission by reference.
+
+        Returns None when no record exists.
+        """
+        self._ensure_valid_token()
+
+        query_req = QueryRequest(
+            filter_group=QueryFilterGroup(
+                query_filters=[
+                    QueryFilter(
+                        field_name="Reference",
+                        operator="=",
+                        value=reference
+                    )
+                ]
+            ),
+            limit=1
+        )
+
+        response = query_tender_submission.sync(
+            client=self.entity_client,
+            body=query_req
+        )
+        if response and response.value and len(response.value) > 0:
+            return response.value[0]
+        return None
+
+    def _get_submission_tender_file_ids(self, submission_id: str) -> Dict[str, str]:
+        """
+        Return mapping: OriginalPath -> TenderFile Id for an existing submission.
+        """
+        self._ensure_valid_token()
+
+        query_req = QueryRequest(
+            filter_group=QueryFilterGroup(
+                query_filters=[
+                    QueryFilter(
+                        field_name="SubmissionId.Id",
+                        operator="=",
+                        value=str(submission_id)
+                    )
+                ]
+            )
+        )
+
+        from entity_store_transformation_client.api.tender_file.query_tender_file import _get_kwargs
+        kwargs = _get_kwargs(body=query_req, expansion_level=0)
+        response = self.entity_client.get_httpx_client().request(**kwargs)
+
+        if response.status_code != 200:
+            raise Exception(
+                f"Failed to query existing TenderFiles. Status: {response.status_code}, Response: {response.text}"
+            )
+
+        mapping: Dict[str, str] = {}
+        for item in response.json().get('value', []):
+            original_path = item.get('OriginalPath')
+            file_id = item.get('Id')
+            if original_path and file_id:
+                mapping[original_path] = str(file_id)
+        return mapping
+
     def _create_tender_submission(self,
                                   project: TenderProject,
                                   reference: str,
@@ -718,7 +782,8 @@ class UiPathClient:
                               batch_id: Optional[str] = None,
                               sharepoint_folder_path: Optional[str] = None,
                               output_folder_path: Optional[str] = None,
-                              folder_list: Optional[List[str]] = None) -> Dict:
+                              folder_list: Optional[List[str]] = None,
+                              reference: Optional[str] = None) -> Dict:
         """
         Submit a drawing metadata extraction job via Entity Store and UiPath queue
 
@@ -740,11 +805,15 @@ class UiPathClient:
             ValueError: If user not registered in TitleBlockValidationUsers
             Exception: If any step fails
         """
+        # Prefer deterministic reference by batch_id so retries are idempotent.
+        submission_reference = reference
+        if not submission_reference:
+            submission_reference = f"batch-{batch_id}" if batch_id else self._generate_cuid()
+
         # Mock mode - return mock response without Entity Store or UiPath
         if self.mock_mode or not self.entity_client:
-            mock_reference = f"mock-{Cuid().generate()}"
             return {
-                'reference': mock_reference,
+                'reference': submission_reference,
                 'submission_id': 'mock-submission-id',
                 'project_id': 'mock-project-id',
                 'status': 'Queued',
@@ -765,45 +834,83 @@ class UiPathClient:
             # Step 2: Validate user exists (fail-fast)
             user = self._get_validation_user(submitted_by)
 
-            # Step 3: Generate CUID reference
-            reference = self._generate_cuid()
-            print(f"Generated CUID reference: {reference}")
+            print(f"Using submission reference: {submission_reference}")
 
-            # Step 4: Create TenderSubmission
-            submission = self._create_tender_submission(
-                project, reference, user, sharepoint_folder_path, output_folder_path, folder_list)
+            # Step 3: Find or create TenderSubmission (idempotent by reference)
+            submission = self._find_submission_by_reference(submission_reference)
+            existing_file_ids_by_path: Dict[str, str] = {}
+            if submission:
+                print(
+                    f"Found existing TenderSubmission for reference {submission_reference}: ID={submission.id}. Reusing it.")
+                existing_file_ids_by_path = self._get_submission_tender_file_ids(
+                    str(submission.id))
+            else:
+                submission = self._create_tender_submission(
+                    project, submission_reference, user, sharepoint_folder_path, output_folder_path, folder_list)
 
-            # Step 5: Create TenderFile records and build queue items
+            # If we already have all files for this submission reference, skip re-queueing.
+            if all(file_path in existing_file_ids_by_path for file_path in file_paths):
+                return {
+                    'reference': submission_reference,
+                    'submission_id': str(submission.id),
+                    'project_id': str(project.id),
+                    'status': 'Queued',
+                    'tender_id': tender_id,
+                    'file_count': len(file_paths),
+                    'submitted_at': datetime.utcnow().isoformat(),
+                    'submitted_by': submitted_by,
+                    'batch_id': batch_id,
+                    'idempotent_reused': True,
+                    'message': 'Submission already exists for this batch reference; skipped duplicate queueing.'
+                }
+
+            # Step 4: Create missing TenderFile records and build queue items
             queue_items = []
             document_count = len(file_paths)
 
             for file_path in file_paths:
-                # Create TenderFile record
+                if file_path in existing_file_ids_by_path:
+                    continue
+
                 tender_file = self._create_tender_file(submission, file_path)
                 created_files.append(tender_file)
+                tender_file_id = str(tender_file.id)
 
-                # Build queue item
                 queue_item = self._build_queue_item(
                     file_path=file_path,
                     tender_id=tender_id,
                     submitted_by=submitted_by,
-                    reference=reference,
+                    reference=submission_reference,
                     document_count=document_count,
                     discipline=discipline,
-                    tender_file_id=str(tender_file.id),
+                    tender_file_id=tender_file_id,
                     title_block_coords=title_block_coords,
                     sharepoint_folder_path=sharepoint_folder_path,
                     output_folder_path=output_folder_path
                 )
                 queue_items.append(queue_item)
 
-            # Step 6: Submit to UiPath queue (with rollback on failure)
+            if not queue_items:
+                return {
+                    'reference': submission_reference,
+                    'submission_id': str(submission.id),
+                    'project_id': str(project.id),
+                    'status': 'Queued',
+                    'tender_id': tender_id,
+                    'file_count': len(file_paths),
+                    'submitted_at': datetime.utcnow().isoformat(),
+                    'submitted_by': submitted_by,
+                    'batch_id': batch_id,
+                    'idempotent_reused': True
+                }
+
+            # Step 5: Submit missing queue items (with rollback on failure)
             try:
                 uipath_response = self._bulk_add_queue_items(queue_items)
 
                 # Success - return submission details
                 return {
-                    'reference': reference,
+                    'reference': submission_reference,
                     'submission_id': str(submission.id),
                     'project_id': str(project.id),
                     'status': 'Queued',
@@ -843,35 +950,10 @@ class UiPathClient:
         Raises:
             Exception: If submission not found or query fails
         """
-        # Ensure token is valid before proceeding
-        self._ensure_valid_token()
-
         try:
             print(f"Looking up TenderSubmission with Reference='{reference}'")
-
-            # Build query to find submission by reference
-            query_req = QueryRequest(
-                filter_group=QueryFilterGroup(
-                    query_filters=[
-                        QueryFilter(
-                            field_name="Reference",
-                            operator="=",
-                            value=reference
-                        )
-                    ]
-                ),
-                limit=1
-            )
-
-            # Execute query
-            response = query_tender_submission.sync(
-                client=self.entity_client,
-                body=query_req
-            )
-
-            # Check if submission exists
-            if response and response.value and len(response.value) > 0:
-                submission = response.value[0]
+            submission = self._find_submission_by_reference(reference)
+            if submission:
                 print(f"Found TenderSubmission: ID={submission.id}")
                 return submission
 

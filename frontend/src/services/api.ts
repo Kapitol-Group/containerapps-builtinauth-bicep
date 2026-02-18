@@ -314,7 +314,7 @@ export const batchesApi = {
         }
     },
 
-    updateStatus: async (tenderId: string, batchId: string, status: 'pending' | 'running' | 'completed' | 'failed'): Promise<Batch> => {
+    updateStatus: async (tenderId: string, batchId: string, status: 'pending' | 'submitting' | 'running' | 'completed' | 'failed'): Promise<Batch> => {
         const response = await api.patch<ApiResponse<Batch>>(`/tenders/${tenderId}/batches/${batchId}`, { status });
         if (!response.data.success || !response.data.data) {
             throw new Error(response.data.error || 'Failed to update batch status');

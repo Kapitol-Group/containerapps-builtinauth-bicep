@@ -124,6 +124,8 @@ const BatchList: React.FC<BatchListProps> = ({
         switch (status) {
             case 'pending':
                 return 'status-pending';
+            case 'submitting':
+                return 'status-running';
             case 'running':
                 return 'status-running';
             case 'completed':

@@ -86,6 +86,9 @@ JOB_CLEANUP_SECONDS = 3600
 
 # Keep stored batch error text compact to avoid blob metadata overflow.
 MAX_BATCH_ERROR_CHARS = int(os.getenv('BATCH_METADATA_ERROR_MAX_CHARS', '512'))
+BATCH_SUBMISSION_LOCK_SECONDS = int(os.getenv('BATCH_SUBMISSION_LOCK_SECONDS', '900'))
+BATCH_PENDING_RETRY_MIN_AGE_MINUTES = int(os.getenv('BATCH_PENDING_RETRY_MIN_AGE_MINUTES', '5'))
+BATCH_MAX_FAILED_ATTEMPTS = int(os.getenv('BATCH_MAX_FAILED_ATTEMPTS', '3'))
 
 
 def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
@@ -95,6 +98,49 @@ def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
     if len(error_text) <= MAX_BATCH_ERROR_CHARS:
         return error_text
     return error_text[:MAX_BATCH_ERROR_CHARS - 3] + '...'
+
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_submission_owner(source: str) -> str:
+    host = os.getenv('HOSTNAME', 'local')
+    return f"{source}:{host}:{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex[:8]}"
+
+
+def _mark_batch_submission_failed(tender_id: str, batch_id: str, error: object,
+                                  prefix: Optional[str] = None):
+    compact_error = _compact_batch_error(error, prefix=prefix)
+    try:
+        batch = metadata_store.get_batch(tender_id, batch_id)
+        attempts = batch.get('submission_attempts', []) if batch else []
+        if attempts and attempts[-1].get('status') == 'in_progress':
+            attempts[-1]['status'] = 'failed'
+            attempts[-1]['error'] = compact_error
+
+        updated = metadata_store.update_batch(tender_id, batch_id, {
+            'status': 'failed',
+            'submission_attempts': attempts,
+            'last_error': compact_error,
+            'submission_owner': '',
+            'submission_locked_until': ''
+        })
+        if not updated:
+            logger.error(
+                "[Submission] Failed to mark batch %s as failed because metadata update returned no result",
+                batch_id
+            )
+    except Exception as update_error:
+        logger.error(
+            "[Submission] Failed to update batch %s to failed state: %s",
+            batch_id, update_error
+        )
 
 
 # Log startup info
@@ -250,7 +296,11 @@ def _process_uipath_submission_async(
     user_email: str,
     sharepoint_folder_path: str,
     output_folder_path: str,
-    folder_list: list = None
+    folder_list: list = None,
+    claim_before_submit: bool = True,
+    claim_allowed_statuses: Optional[list] = None,
+    attempt_source: str = 'submission',
+    claim_owner: Optional[str] = None,
 ):
     """
     Background worker to submit extraction job to UiPath.
@@ -258,22 +308,35 @@ def _process_uipath_submission_async(
     Updates batch metadata with success/failure details.
     """
     try:
-        logger.info(
-            f"[Background] Starting UiPath submission for batch {batch_id}")
+        logger.info("[Background] Starting UiPath submission for batch %s", batch_id)
 
-        # Get current batch to track attempts
-        batch = metadata_store.get_batch(tender_id, batch_id)
+        batch = None
+        if claim_before_submit:
+            owner = claim_owner or _build_submission_owner(attempt_source)
+            allowed = claim_allowed_statuses or ['pending', 'failed', 'submitting']
+            batch = metadata_store.claim_batch_for_submission(
+                tender_id=tender_id,
+                batch_id=batch_id,
+                owner=owner,
+                allowed_statuses=allowed,
+                lock_seconds=BATCH_SUBMISSION_LOCK_SECONDS,
+                attempt_source=attempt_source,
+                submitted_by=user_email,
+            )
+            if not batch:
+                logger.info(
+                    "[Background] Skipping submission for batch %s: claim rejected",
+                    batch_id
+                )
+                return
+        else:
+            batch = metadata_store.get_batch(tender_id, batch_id)
+            if not batch:
+                logger.warning("[Background] Batch %s not found during submission", batch_id)
+                return
+
         attempts = batch.get('submission_attempts', []) if batch else []
-
-        # Record attempt start
-        attempts.append({
-            'timestamp': datetime.utcnow().isoformat(),
-            'status': 'in_progress'
-        })
-
-        metadata_store.update_batch(tender_id, batch_id, {
-            'submission_attempts': attempts
-        })
+        existing_reference = batch.get('uipath_reference', '') if batch else ''
 
         job = uipath_client.submit_extraction_job(
             tender_id=tender_name,
@@ -284,68 +347,54 @@ def _process_uipath_submission_async(
             batch_id=batch_id,
             sharepoint_folder_path=sharepoint_folder_path,
             output_folder_path=output_folder_path,
-            folder_list=folder_list
+            folder_list=folder_list,
+            reference=existing_reference or None,
         )
 
         logger.info(
-            f"[Background] Successfully submitted batch {batch_id} to UiPath with reference {job.get('reference')}"
+            "[Background] Successfully submitted batch %s to UiPath with reference %s",
+            batch_id, job.get('reference')
         )
 
-        # Update batch with success details
-        attempts[-1]['status'] = 'success'
-        attempts[-1]['reference'] = job.get('reference')
+        if attempts and attempts[-1].get('status') == 'in_progress':
+            attempts[-1]['status'] = 'success'
+            attempts[-1]['reference'] = job.get('reference', '')
 
-        metadata_store.update_batch(tender_id, batch_id, {
+        updated = metadata_store.update_batch(tender_id, batch_id, {
             'status': 'running',
             'uipath_reference': job.get('reference', ''),
             'uipath_submission_id': job.get('submission_id', ''),
             'uipath_project_id': job.get('project_id', ''),
             'submission_attempts': attempts,
-            'last_error': ''
+            'last_error': '',
+            'submission_owner': '',
+            'submission_locked_until': ''
         })
+        if not updated:
+            raise RuntimeError("Batch metadata update returned no result after UiPath submission")
 
     except ValueError as user_error:
-        # User validation failed - update batch with error
         logger.error(
-            f"[Background] User validation failed for batch {batch_id}: {str(user_error)}")
-
-        try:
-            batch = metadata_store.get_batch(tender_id, batch_id)
-            attempts = batch.get('submission_attempts', []) if batch else []
-            if attempts:
-                attempts[-1]['status'] = 'failed'
-                attempts[-1]['error'] = _compact_batch_error(user_error)
-
-            metadata_store.update_batch(tender_id, batch_id, {
-                'status': 'failed',
-                'submission_attempts': attempts,
-                'last_error': _compact_batch_error(
-                    user_error, prefix='User validation failed: ')
-            })
-        except Exception as update_error:
-            logger.error(
-                f"[Background] Failed to update batch status: {update_error}")
+            "[Background] User validation failed for batch %s: %s",
+            batch_id, user_error
+        )
+        _mark_batch_submission_failed(
+            tender_id=tender_id,
+            batch_id=batch_id,
+            error=user_error,
+            prefix='User validation failed: '
+        )
 
     except Exception as e:
-        # UiPath submission failed - update batch with error
         logger.error(
-            f"[Background] UiPath submission failed for batch {batch_id}: {str(e)}", exc_info=True)
-
-        try:
-            batch = metadata_store.get_batch(tender_id, batch_id)
-            attempts = batch.get('submission_attempts', []) if batch else []
-            if attempts:
-                attempts[-1]['status'] = 'failed'
-                attempts[-1]['error'] = _compact_batch_error(e)
-
-            metadata_store.update_batch(tender_id, batch_id, {
-                'status': 'failed',
-                'submission_attempts': attempts,
-                'last_error': _compact_batch_error(e)
-            })
-        except Exception as update_error:
-            logger.error(
-                f"[Background] Failed to update batch status: {update_error}")
+            "[Background] UiPath submission failed for batch %s: %s",
+            batch_id, e, exc_info=True
+        )
+        _mark_batch_submission_failed(
+            tender_id=tender_id,
+            batch_id=batch_id,
+            error=e
+        )
 
 
 def retry_stuck_batches():
@@ -357,180 +406,114 @@ def retry_stuck_batches():
 
     while True:
         try:
-            # Sleep first to allow app startup to complete
             time.sleep(300)  # 5 minutes
-
             logger.info("[Retry Worker] Checking for stuck batches...")
 
-            # Find all tenders
             tenders = metadata_store.list_tenders()
             stuck_count = 0
             retry_count = 0
 
             for tender in tenders:
                 tender_id = tender['id']
+                tender_name = tender.get('name', tender_id)
 
                 try:
                     batches = metadata_store.list_batches(tender_id)
-
-                    for batch in batches:
-                        # Find batches stuck in pending for > 5 minutes
-                        if batch.get('status') == 'pending':
-                            try:
-                                submitted_at = datetime.fromisoformat(
-                                    batch['submitted_at'])
-                                age = datetime.utcnow() - submitted_at
-
-                                if age > timedelta(minutes=5):
-                                    stuck_count += 1
-                                    logger.warning(
-                                        f"[Retry Worker] Found stuck batch {batch['batch_id']} in tender {tender_id} "
-                                        f"(age: {int(age.total_seconds()//60)} min)"
-                                    )
-
-                                    # Check retry attempts to prevent infinite retries
-                                    submission_attempts = batch.get(
-                                        'submission_attempts', [])
-                                    failed_attempts = [
-                                        a for a in submission_attempts if a.get('status') == 'failed']
-
-                                    # Old batches (>24 hours) without submission tracking should be marked as failed
-                                    if age > timedelta(hours=24) and len(submission_attempts) == 0:
-                                        logger.warning(
-                                            f"[Retry Worker] Batch {batch['batch_id']} is very old ({int(age.total_seconds()//3600)} hours) "
-                                            f"with no tracked attempts. Marking as failed (legacy batch)."
-                                        )
-                                        try:
-                                            metadata_store.update_batch(tender_id, batch['batch_id'], {
-                                                'status': 'failed',
-                                                'last_error': f'Legacy batch older than 24 hours with no submission tracking. Original submission failed.'
-                                            })
-                                        except Exception as update_error:
-                                            logger.error(
-                                                f"[Retry Worker] Failed to update batch status: {update_error}")
-                                        continue
-
-                                    # Check TOTAL attempts (not just failed) to catch infinite loops
-                                    # If we have >5 total attempts, something is wrong (normal is 1 success or <=3 failures)
-                                    if len(submission_attempts) > 5:
-                                        logger.error(
-                                            f"[Retry Worker] Batch {batch['batch_id']} has {len(submission_attempts)} attempts. "
-                                            f"This indicates an infinite retry loop. Marking as failed."
-                                        )
-                                        try:
-                                            # Use simple update to avoid metadata size issues
-                                            metadata_store.update_batch(tender_id, batch['batch_id'], {
-                                                'status': 'failed',
-                                                'last_error': f'Too many submission attempts ({len(submission_attempts)}). Likely infinite retry loop or metadata size limit exceeded.'
-                                            })
-                                        except Exception as update_error:
-                                            logger.error(
-                                                f"[Retry Worker] Failed to mark looping batch as failed: {update_error}")
-                                            # If we can't even update the status, try to delete the batch to stop the loop
-                                            try:
-                                                logger.warning(
-                                                    f"[Retry Worker] Attempting to delete stuck batch {batch['batch_id']}")
-                                                metadata_store.delete_batch(
-                                                    tender_id, batch['batch_id'])
-                                            except Exception as delete_error:
-                                                logger.critical(
-                                                    f"[Retry Worker] CRITICAL: Cannot update or delete looping batch {batch['batch_id']}. "
-                                                    f"Manual intervention required. Error: {delete_error}"
-                                                )
-                                        continue
-
-                                    if len(failed_attempts) >= 3:
-                                        logger.warning(
-                                            f"[Retry Worker] Batch {batch['batch_id']} has reached max retry limit (3 failed attempts). "
-                                            f"Marking as permanently failed."
-                                        )
-                                        try:
-                                            metadata_store.update_batch(tender_id, batch['batch_id'], {
-                                                'status': 'failed',
-                                                'last_error': f'Maximum retry limit reached after {len(failed_attempts)} failed attempts'
-                                            })
-                                        except Exception as update_error:
-                                            logger.error(
-                                                f"[Retry Worker] Failed to update batch status: {update_error}")
-                                        continue
-
-                                    # Retry UiPath submission
-                                    try:
-                                        # Extract necessary fields from batch metadata
-                                        category = batch.get('discipline') or batch.get(
-                                            'destination', 'Unknown')
-                                        # submitted_by should be email address (stored during batch creation)
-                                        submitted_by = batch.get(
-                                            'submitted_by', 'System')
-
-                                        job = uipath_client.submit_extraction_job(
-                                            tender_id=tender_id,
-                                            file_paths=batch['file_paths'],
-                                            discipline=category,
-                                            title_block_coords=batch['title_block_coords'],
-                                            submitted_by=submitted_by,
-                                            batch_id=batch['batch_id'],
-                                            sharepoint_folder_path=None,  # Not stored in batch metadata
-                                            output_folder_path=None
-                                        )
-
-                                        # Update status to running on success
-                                        try:
-                                            metadata_store.update_batch_status(
-                                                tender_id, batch['batch_id'], 'running')
-                                            retry_count += 1
-
-                                            logger.info(
-                                                f"[Retry Worker] Successfully retried batch {batch['batch_id']} "
-                                                f"with reference {job.get('reference')}"
-                                            )
-                                        except Exception as status_error:
-                                            # CRITICAL: Submission succeeded but status update failed
-                                            # This causes infinite retry loops - mark as failed to stop the loop
-                                            error_msg = str(status_error)
-                                            logger.error(
-                                                f"[Retry Worker] UiPath submission succeeded for batch {batch['batch_id']} "
-                                                f"but status update failed: {error_msg}. Marking as failed to prevent loop."
-                                            )
-                                            try:
-                                                # Try simple status update without adding to submission_attempts
-                                                metadata_store.update_batch(tender_id, batch['batch_id'], {
-                                                    'status': 'failed',
-                                                    'last_error': f'Submitted to UiPath but metadata update failed (likely size limit): {error_msg}. Check UiPath for results.'
-                                                })
-                                            except Exception as final_error:
-                                                logger.critical(
-                                                    f"[Retry Worker] CRITICAL: Batch {batch['batch_id']} submitted to UiPath "
-                                                    f"but cannot update status. Manual cleanup required. Error: {final_error}"
-                                                )
-
-                                    except Exception as retry_error:
-                                        logger.error(
-                                            f"[Retry Worker] Retry failed for batch {batch['batch_id']}: {str(retry_error)}"
-                                        )
-                                        # Leave in pending, will retry again in next cycle (up to max limit)
-
-                            except (ValueError, KeyError) as parse_error:
-                                logger.error(
-                                    f"[Retry Worker] Error parsing batch {batch.get('batch_id')}: {parse_error}"
-                                )
-
                 except Exception as tender_error:
                     logger.error(
-                        f"[Retry Worker] Error processing tender {tender_id}: {tender_error}"
+                        "[Retry Worker] Error listing batches for tender %s: %s",
+                        tender_id, tender_error
                     )
+                    continue
+
+                for batch in batches:
+                    batch_id = batch.get('batch_id')
+                    if not batch_id:
+                        continue
+
+                    try:
+                        status = batch.get('status', 'pending')
+                        attempts = batch.get('submission_attempts', [])
+                        failed_attempts = [
+                            a for a in attempts if a.get('status') == 'failed'
+                        ]
+
+                        if len(failed_attempts) >= BATCH_MAX_FAILED_ATTEMPTS:
+                            if status != 'failed':
+                                metadata_store.update_batch(tender_id, batch_id, {
+                                    'status': 'failed',
+                                    'last_error': f'Maximum retry limit reached after {len(failed_attempts)} failed attempts',
+                                    'submission_owner': '',
+                                    'submission_locked_until': ''
+                                })
+                            continue
+
+                        allow_statuses = None
+                        if status == 'pending':
+                            submitted_at = _parse_iso_datetime(batch.get('submitted_at'))
+                            if not submitted_at:
+                                continue
+                            age = datetime.utcnow() - submitted_at
+                            if age <= timedelta(minutes=BATCH_PENDING_RETRY_MIN_AGE_MINUTES):
+                                continue
+                            allow_statuses = ['pending']
+                            stuck_count += 1
+                        elif status == 'submitting':
+                            lock_until = _parse_iso_datetime(batch.get('submission_locked_until'))
+                            if lock_until and lock_until > datetime.utcnow():
+                                continue
+                            allow_statuses = ['submitting']
+                            stuck_count += 1
+                        else:
+                            continue
+
+                        submitted_by = batch.get('submitted_by', 'system')
+                        owner = _build_submission_owner('auto-retry')
+                        claimed = metadata_store.claim_batch_for_submission(
+                            tender_id=tender_id,
+                            batch_id=batch_id,
+                            owner=owner,
+                            allowed_statuses=allow_statuses,
+                            lock_seconds=BATCH_SUBMISSION_LOCK_SECONDS,
+                            attempt_source='auto-retry',
+                            submitted_by=submitted_by
+                        )
+                        if not claimed:
+                            continue
+
+                        _process_uipath_submission_async(
+                            tender_id=tender_id,
+                            tender_name=tender_name,
+                            batch_id=batch_id,
+                            file_paths=claimed.get('file_paths', []),
+                            category=claimed.get('discipline') or 'Unknown',
+                            title_block_coords=claimed.get('title_block_coords', {}),
+                            user_email=submitted_by,
+                            sharepoint_folder_path=claimed.get('sharepoint_folder_path', ''),
+                            output_folder_path=claimed.get('output_folder_path', ''),
+                            folder_list=claimed.get('folder_list', []),
+                            claim_before_submit=False,
+                            attempt_source='auto-retry',
+                            claim_owner=owner,
+                        )
+                        retry_count += 1
+
+                    except Exception as retry_error:
+                        logger.error(
+                            "[Retry Worker] Retry failed for batch %s in tender %s: %s",
+                            batch_id, tender_id, retry_error
+                        )
 
             if stuck_count > 0:
                 logger.info(
-                    f"[Retry Worker] Retry cycle complete: Found {stuck_count} stuck batches, "
-                    f"successfully retried {retry_count}"
+                    "[Retry Worker] Retry cycle complete: found %s stuck batches, successfully retried %s",
+                    stuck_count, retry_count
                 )
             else:
                 logger.debug("[Retry Worker] No stuck batches found")
 
         except Exception as e:
-            logger.error(
-                f"[Retry Worker] Error in retry loop: {str(e)}", exc_info=True)
+            logger.error("[Retry Worker] Error in retry loop: %s", e, exc_info=True)
 
 
 # Start retry worker thread
@@ -1559,11 +1542,29 @@ def retry_batch(tender_id: str, batch_id: str):
 
         # Check if batch is in a retriable state
         status = batch.get('status', '')
-        if status not in ['pending', 'failed']:
+        if status in ['running', 'completed']:
             return jsonify({
                 'success': False,
-                'error': f'Batch cannot be retried. Current status: {status}. Only pending or failed batches can be retried.'
+                'error': f'Batch cannot be retried. Current status: {status}.'
             }), 400
+
+        if status == 'submitting':
+            lock_until = _parse_iso_datetime(batch.get('submission_locked_until'))
+            if lock_until and lock_until > datetime.utcnow():
+                return jsonify({
+                    'success': False,
+                    'error': 'Batch is currently being submitted. Please wait and refresh.'
+                }), 409
+
+        if status == 'pending':
+            submitted_at = _parse_iso_datetime(batch.get('submitted_at'))
+            if submitted_at:
+                age = datetime.utcnow() - submitted_at
+                if age <= timedelta(minutes=BATCH_PENDING_RETRY_MIN_AGE_MINUTES):
+                    return jsonify({
+                        'success': False,
+                        'error': f'Batch is still within the initial submission window ({BATCH_PENDING_RETRY_MIN_AGE_MINUTES} minutes). Please wait before retrying.'
+                    }), 409
 
         # Get tender info for submission
         tender = metadata_store.get_tender(tender_id)
@@ -1594,6 +1595,22 @@ def retry_batch(tender_id: str, batch_id: str):
                 'error': 'Batch has no files to process'
             }), 400
 
+        owner = _build_submission_owner('manual-retry')
+        claimed = metadata_store.claim_batch_for_submission(
+            tender_id=tender_id,
+            batch_id=batch_id,
+            owner=owner,
+            allowed_statuses=['failed', 'pending', 'submitting'],
+            lock_seconds=BATCH_SUBMISSION_LOCK_SECONDS,
+            attempt_source='manual-retry',
+            submitted_by=user_email
+        )
+        if not claimed:
+            return jsonify({
+                'success': False,
+                'error': 'Batch retry was not started because another submission process already claimed this batch.'
+            }), 409
+
         # Spawn background thread to retry submission
         logger.info(
             f"Manual retry initiated for batch {batch_id} in tender {tender_id} by {user_email}")
@@ -1612,6 +1629,11 @@ def retry_batch(tender_id: str, batch_id: str):
                 output_folder_path,
                 folder_list
             ),
+            kwargs={
+                'claim_before_submit': False,
+                'attempt_source': 'manual-retry',
+                'claim_owner': owner,
+            },
             daemon=True
         )
         retry_thread.start()
@@ -1919,6 +1941,7 @@ def queue_extraction():
             }), 400
 
         user_info = extract_user_info(request.headers)
+        user_email = user_info.get('email') or user_info.get('name', 'Unknown')
 
         logger.info(
             f"Creating batch and queuing extraction for tender {tender_id}")
@@ -1931,8 +1954,7 @@ def queue_extraction():
             discipline=category,  # Store in discipline field for backward compatibility
             file_paths=file_paths,
             title_block_coords=title_block_coords,
-            submitted_by=user_info.get(
-                'email') or user_info.get('name', 'Unknown'),
+            submitted_by=user_email,
             job_id=None,  # Will be updated after UiPath submission
             sharepoint_folder_path=sharepoint_folder_path,
             output_folder_path=output_folder_path,
@@ -1947,6 +1969,22 @@ def queue_extraction():
             batch_id=batch['batch_id']
         )
 
+        owner = _build_submission_owner('initial-submit')
+        claimed = metadata_store.claim_batch_for_submission(
+            tender_id=tender_id,
+            batch_id=batch['batch_id'],
+            owner=owner,
+            allowed_statuses=['pending'],
+            lock_seconds=BATCH_SUBMISSION_LOCK_SECONDS,
+            attempt_source='initial-submit',
+            submitted_by=user_email
+        )
+        if not claimed:
+            return jsonify({
+                'success': False,
+                'error': 'Batch was created but could not be claimed for submission. Please retry.'
+            }), 409
+
         # Start UiPath submission in background thread to avoid timeout
         # The batch is already created and files are categorized, so we can return immediately
         submission_thread = threading.Thread(
@@ -1958,11 +1996,16 @@ def queue_extraction():
                 file_paths,
                 category,
                 title_block_coords,
-                user_info.get('email', 'Unknown'),
+                user_email,
                 sharepoint_folder_path,
                 output_folder_path,
                 folder_list
             ),
+            kwargs={
+                'claim_before_submit': False,
+                'attempt_source': 'initial-submit',
+                'claim_owner': owner,
+            },
             daemon=True  # Daemon thread will not block app shutdown
         )
         submission_thread.start()
@@ -1976,9 +2019,9 @@ def queue_extraction():
             'success': True,
             'data': {
                 'batch_id': batch['batch_id'],
-                'status': 'pending',  # Initial status
+                'status': claimed.get('status', 'submitting'),
                 'message': f'Batch created successfully. Processing {len(file_paths)} files in background.',
-                'batch': batch
+                'batch': claimed
             }
         }), 202
 
