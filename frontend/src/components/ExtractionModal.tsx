@@ -22,6 +22,56 @@ interface ExtractionModalProps {
   onSubmit: () => void;
 }
 
+// Known standard page sizes in PDF points (1 pt = 1/72 inch)
+const KNOWN_PAGE_SIZES: Array<{ name: string; width: number; height: number }> = [
+  { name: 'A0', width: 3370, height: 2384 },
+  { name: 'A1', width: 2384, height: 1684 },
+  { name: 'A2', width: 1684, height: 1191 },
+  { name: 'A3', width: 1191, height: 842 },
+  { name: 'A4', width: 842, height: 595 },
+  { name: 'ANSI D', width: 2448, height: 1584 },
+  { name: 'ANSI E', width: 3168, height: 2448 },
+  { name: 'ARCH D', width: 2592, height: 1728 },
+  { name: 'ARCH E', width: 3456, height: 2592 },
+];
+
+const PAGE_SIZE_TOLERANCE = 20; // PDF points (~7mm)
+
+interface PageSizeInfo {
+  fileName: string;
+  width: number;
+  height: number;
+  error?: string;
+}
+
+function identifyPageSize(w: number, h: number): string {
+  // Normalise to landscape (wider dimension first) for comparison
+  const [wide, narrow] = w >= h ? [w, h] : [h, w];
+  for (const size of KNOWN_PAGE_SIZES) {
+    const [sWide, sNarrow] = size.width >= size.height
+      ? [size.width, size.height]
+      : [size.height, size.width];
+    if (
+      Math.abs(wide - sWide) <= PAGE_SIZE_TOLERANCE &&
+      Math.abs(narrow - sNarrow) <= PAGE_SIZE_TOLERANCE
+    ) {
+      return size.name;
+    }
+  }
+  return 'Custom';
+}
+
+function areSameSize(a: PageSizeInfo, b: PageSizeInfo): boolean {
+  // Compare in both orientations
+  const matchSame =
+    Math.abs(a.width - b.width) <= PAGE_SIZE_TOLERANCE &&
+    Math.abs(a.height - b.height) <= PAGE_SIZE_TOLERANCE;
+  const matchFlipped =
+    Math.abs(a.width - b.height) <= PAGE_SIZE_TOLERANCE &&
+    Math.abs(a.height - b.width) <= PAGE_SIZE_TOLERANCE;
+  return matchSame || matchFlipped;
+}
+
 const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName, files, onClose, onSubmit }) => {
   const [destination, setDestination] = useState('');
   const [destinations, setDestinations] = useState<Array<{ name: string; path: string }>>([]);
@@ -34,6 +84,9 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
   const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
   const [requiresTitleBlock, setRequiresTitleBlock] = useState(false);
   const [tender, setTender] = useState<Tender | null>(null);
+  const [isCheckingPageSizes, setIsCheckingPageSizes] = useState(false);
+  const [pageSizeWarning, setPageSizeWarning] = useState<string | null>(null);
+  const [pageSizeCheckPassed, setPageSizeCheckPassed] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
@@ -98,6 +151,114 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
     
     loadDestinations();
   }, [tenderId]);
+
+  // Check page sizes when title block processing is toggled on
+  useEffect(() => {
+    if (!requiresTitleBlock) {
+      setPageSizeWarning(null);
+      setPageSizeCheckPassed(false);
+      return;
+    }
+
+    const pdfFiles = files.filter(
+      f => f.content_type?.toLowerCase().includes('pdf') || f.name.toLowerCase().endsWith('.pdf')
+    );
+
+    // Nothing to compare with 0 or 1 PDF
+    if (pdfFiles.length <= 1) {
+      setPageSizeWarning(null);
+      setPageSizeCheckPassed(pdfFiles.length === 1);
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkPageSizes = async () => {
+      setIsCheckingPageSizes(true);
+      setPageSizeWarning(null);
+      setPageSizeCheckPassed(false);
+
+      const results: PageSizeInfo[] = [];
+
+      const settled = await Promise.allSettled(
+        pdfFiles.map(async (file): Promise<PageSizeInfo> => {
+          const blob = await filesApi.download(tenderId, file.path);
+          const arrayBuffer = await blob.arrayBuffer();
+          const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+          const pdf = await loadingTask.promise;
+          try {
+            const page = await pdf.getPage(1);
+            const viewport = page.getViewport({ scale: 1.0 });
+            return { fileName: file.name, width: Math.round(viewport.width), height: Math.round(viewport.height) };
+          } finally {
+            pdf.destroy();
+          }
+        })
+      );
+
+      if (cancelled) return;
+
+      for (const result of settled) {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          // Extract filename from the rejection if possible
+          results.push({ fileName: '(unknown file)', width: 0, height: 0, error: 'Could not read page size' });
+        }
+      }
+
+      // Also capture files that individually failed
+      const errors = results.filter(r => r.error);
+      const valid = results.filter(r => !r.error);
+
+      // Group valid results by page size
+      const groups: PageSizeInfo[][] = [];
+      for (const info of valid) {
+        let placed = false;
+        for (const group of groups) {
+          if (areSameSize(group[0], info)) {
+            group.push(info);
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          groups.push([info]);
+        }
+      }
+
+      if (groups.length <= 1 && errors.length === 0) {
+        setPageSizeCheckPassed(true);
+        setIsCheckingPageSizes(false);
+        return;
+      }
+
+      // Build warning message
+      const parts: string[] = [];
+      for (const group of groups) {
+        const rep = group[0];
+        const label = identifyPageSize(rep.width, rep.height);
+        const fileNames = group.map(g => g.fileName).join(', ');
+        parts.push(
+          `${label} (${rep.width}×${rep.height} pts) — ${group.length} file${group.length > 1 ? 's' : ''}: ${fileNames}`
+        );
+      }
+      for (const err of errors) {
+        parts.push(`⚠ ${err.fileName}: ${err.error}`);
+      }
+
+      setPageSizeWarning(
+        `Selected PDFs have different page sizes. The title block region may not align correctly on all files.\n\n${parts.join('\n')}`
+      );
+      setIsCheckingPageSizes(false);
+    };
+
+    checkPageSizes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [requiresTitleBlock, files, tenderId]);
 
   useEffect(() => {
     return () => {
@@ -218,6 +379,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
 
       // Calculate scale to fit the available space
       const viewport = page.getViewport({ scale: 1.0 });
+      console.log('[ExtractionModal] PDF page original size', viewport.width, 'x', viewport.height);
       const containerWidth = canvas.parentElement?.clientWidth ?? 0;
       console.log('[ExtractionModal] renderPdfPage containerWidth', containerWidth);
 
@@ -266,6 +428,9 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
       // Always copy offscreen to main canvas
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.drawImage(offscreen, 0, 0);
+
+      // Log canvas dimensions and scale for debugging
+      console.log(`[ExtractionModal] Canvas size: ${canvas.width}x${canvas.height}, PDF viewport: ${scaledViewport.width}x${scaledViewport.height}, scale: ${scale}`);
       
       // Draw selection overlay if not initial load
       if (!skipOverlay && (currentRect || coords)) {
@@ -498,6 +663,27 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
           </label>
         </div>
         
+        {requiresTitleBlock && isCheckingPageSizes && (
+          <div className="page-size-checking">
+            Checking page sizes across {files.filter(f => f.content_type?.toLowerCase().includes('pdf') || f.name.toLowerCase().endsWith('.pdf')).length} PDF files…
+          </div>
+        )}
+
+        {requiresTitleBlock && !isCheckingPageSizes && pageSizeWarning && (
+          <div className="page-size-warning">
+            <strong>⚠ Page Size Mismatch</strong>
+            {pageSizeWarning.split('\n').map((line, i) => (
+              <span key={i}>{line}<br /></span>
+            ))}
+          </div>
+        )}
+
+        {requiresTitleBlock && !isCheckingPageSizes && pageSizeCheckPassed && (
+          <div className="page-size-ok">
+            ✓ All selected PDFs have consistent page sizes
+          </div>
+        )}
+
         {requiresTitleBlock && (
           <div className="form-group">
             <label>Define Title Block Region</label>

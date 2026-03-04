@@ -112,3 +112,46 @@
     border-radius: 4px;
     text-align: center;
 }
+
+/* Page size validation states */
+.page-size-checking {
+    padding: 0.75rem 1rem;
+    background: rgba(0, 120, 212, 0.08);
+    border: 1px solid rgba(0, 120, 212, 0.25);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-style: italic;
+    text-align: center;
+    margin-bottom: 0.5rem;
+}
+
+.page-size-warning {
+    padding: 0.75rem 1rem;
+    background: #fff8e1;
+    border: 1px solid #ffcc02;
+    color: #856404;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    margin-bottom: 0.5rem;
+    white-space: pre-line;
+}
+
+.page-size-warning strong {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.9rem;
+}
+
+.page-size-ok {
+    padding: 0.75rem 1rem;
+    background: rgba(40, 167, 69, 0.1);
+    border: 1px solid rgba(40, 167, 69, 0.35);
+    color: #28a745;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-align: center;
+    margin-bottom: 0.5rem;
+}
