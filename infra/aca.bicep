@@ -23,6 +23,12 @@ param entraClientId string = ''
 param entraTenantId string = ''
 param sharePointBaseUrl string = ''
 
+// M-Files configuration parameters
+param mfilesBaseUrl string = ''
+param mfilesClientId string = ''
+@secure()
+param mfilesClientSecret string = ''
+
 // Data Fabric configuration parameters
 param dataFabricApiUrl string = ''
 param dataFabricApiKey string = ''
@@ -97,6 +103,14 @@ var baseEnvVars = [
     value: sharePointBaseUrl
   }
   {
+    name: 'MFILES_BASE_URL'
+    value: mfilesBaseUrl
+  }
+  {
+    name: 'MFILES_CLIENT_ID'
+    value: mfilesClientId
+  }
+  {
     name: 'DATA_FABRIC_API_URL'
     value: dataFabricApiUrl
   }
@@ -148,6 +162,15 @@ var dataFabricApiKeyEnvVar = !empty(dataFabricApiKey)
     ]
   : []
 
+var mfilesClientSecretEnvVar = !empty(mfilesClientSecret)
+  ? [
+      {
+        name: 'MFILES_CLIENT_SECRET'
+        secretRef: 'mfiles-client-secret'
+      }
+    ]
+  : []
+
 var webhookBatchCompleteKeyEnvVar = !empty(webhookBatchCompleteKey)
   ? [
       {
@@ -157,7 +180,7 @@ var webhookBatchCompleteKeyEnvVar = !empty(webhookBatchCompleteKey)
     ]
   : []
 
-var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar, dataFabricApiKeyEnvVar, webhookBatchCompleteKeyEnvVar)
+var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar, dataFabricApiKeyEnvVar, mfilesClientSecretEnvVar, webhookBatchCompleteKeyEnvVar)
 
 // Build secrets array conditionally
 var baseSecrets = [
@@ -185,6 +208,15 @@ var dataFabricApiKeySecret = !empty(dataFabricApiKey)
     ]
   : []
 
+var mfilesClientSecretSecret = !empty(mfilesClientSecret)
+  ? [
+      {
+        name: 'mfiles-client-secret'
+        value: mfilesClientSecret
+      }
+    ]
+  : []
+
 var webhookBatchCompleteKeySecret = !empty(webhookBatchCompleteKey)
   ? [
       {
@@ -194,7 +226,7 @@ var webhookBatchCompleteKeySecret = !empty(webhookBatchCompleteKey)
     ]
   : []
 
-var allSecrets = concat(baseSecrets, uipathApiKeySecret, dataFabricApiKeySecret, webhookBatchCompleteKeySecret)
+var allSecrets = concat(baseSecrets, uipathApiKeySecret, dataFabricApiKeySecret, mfilesClientSecretSecret, webhookBatchCompleteKeySecret)
 
 module app 'core/host/container-app-upsert.bicep' = {
   name: '${serviceName}-container-app-module'

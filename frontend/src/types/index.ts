@@ -6,6 +6,9 @@ export interface Tender {
     created_at: string;
     created_by: string;
     file_count: number;
+    tender_type?: 'sharepoint' | 'mfiles';
+    mfiles_project_id?: string;
+    mfiles_project_name?: string;
     sharepoint_path?: string; // Deprecated - kept for backward compatibility
     output_location?: string; // Deprecated - kept for backward compatibility
     // New SharePoint identifiers

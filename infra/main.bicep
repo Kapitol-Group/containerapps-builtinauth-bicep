@@ -29,6 +29,16 @@ param serviceManagementReference string = ''
 @description('SharePoint base URL for the frontend')
 param sharePointBaseUrl string = ''
 
+@description('M-Files API base URL')
+param mfilesBaseUrl string = ''
+
+@description('M-Files API client ID')
+param mfilesClientId string = ''
+
+@secure()
+@description('M-Files API client secret')
+param mfilesClientSecret string = ''
+
 @description('Data Fabric API URL')
 param dataFabricApiUrl string = ''
 
@@ -162,6 +172,9 @@ module aca 'aca.bicep' = {
     entraClientId: '' // Will be updated via appupdate
     entraTenantId: tenant().tenantId
     sharePointBaseUrl: sharePointBaseUrl
+    mfilesBaseUrl: mfilesBaseUrl
+    mfilesClientId: mfilesClientId
+    mfilesClientSecret: mfilesClientSecret
     customHostName: customHostName
     customCertificateName: customCertificateName
     // Data Fabric configuration

@@ -130,6 +130,9 @@ class CosmosMetadataStore(MetadataStore):
             'created_at': doc.get('created_at'),
             'created_by': doc.get('created_by'),
             'file_count': int(doc.get('file_count', 0)),
+            'tender_type': doc.get('tender_type', 'sharepoint'),
+            'mfiles_project_id': doc.get('mfiles_project_id'),
+            'mfiles_project_name': doc.get('mfiles_project_name'),
             'sharepoint_path': doc.get('sharepoint_path'),
             'output_location': doc.get('output_location'),
             'sharepoint_site_id': doc.get('sharepoint_site_id'),
@@ -436,6 +439,7 @@ class CosmosMetadataStore(MetadataStore):
             'updated_at': self._utc_now(),
         }
         for field in [
+            'tender_type', 'mfiles_project_id', 'mfiles_project_name',
             'sharepoint_path', 'output_location',
             'sharepoint_site_id', 'sharepoint_library_id', 'sharepoint_folder_path',
             'output_site_id', 'output_library_id', 'output_folder_path'
@@ -493,6 +497,7 @@ class CosmosMetadataStore(MetadataStore):
             'updated_at': self._utc_now(),
         }
         for field in [
+            'tender_type', 'mfiles_project_id', 'mfiles_project_name',
             'sharepoint_path', 'output_location',
             'sharepoint_site_id', 'sharepoint_library_id', 'sharepoint_folder_path',
             'output_site_id', 'output_library_id', 'output_folder_path'

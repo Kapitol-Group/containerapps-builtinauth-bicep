@@ -40,6 +40,9 @@ export const tendersApi = {
 
     create: async (data: {
         name: string;
+        tender_type?: 'sharepoint' | 'mfiles';
+        mfiles_project_id?: string;
+        mfiles_project_name?: string;
         sharepoint_path?: string;
         output_location?: string;
         sharepoint_site_id?: string;
@@ -324,6 +327,17 @@ export const batchesApi = {
 
     delete: async (tenderId: string, batchId: string): Promise<void> => {
         await api.delete(`/tenders/${tenderId}/batches/${batchId}`);
+    },
+};
+
+// M-Files API
+export const mfilesApi = {
+    listProjects: async (): Promise<Array<{ id: string; name: string }>> => {
+        const response = await api.get<ApiResponse<Array<{ id: string; name: string }>>>('/mfiles/projects');
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to list M-Files projects');
+        }
+        return response.data.data;
     },
 };
 

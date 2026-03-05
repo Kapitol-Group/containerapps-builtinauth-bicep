@@ -29,6 +29,15 @@
     "sharePointBaseUrl": {
       "value": "${VITE_SHAREPOINT_BASE_URL}"
     },
+    "mfilesBaseUrl": {
+      "value": "${MFILES_BASE_URL}"
+    },
+    "mfilesClientId": {
+      "value": "${MFILES_CLIENT_ID}"
+    },
+    "mfilesClientSecret": {
+      "value": "${MFILES_CLIENT_SECRET}"
+    },
     "dataFabricApiUrl": {
       "value": "${DATA_FABRIC_API_URL}"
     },

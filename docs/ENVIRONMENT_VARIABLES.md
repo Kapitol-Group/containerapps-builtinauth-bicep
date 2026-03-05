@@ -78,6 +78,19 @@ This document describes all environment variables used by the Tender Automation 
 - When missing, Entity Store features disabled but mock mode still works
 - API key stored as **secret** in Azure Container Apps
 
+### M-Files Configuration
+
+| Variable | Description | Required | Default | Example |
+|----------|-------------|----------|---------|---------|
+| `MFILES_BASE_URL` | M-Files integration API base URL | Yes* | - | `https://connectdev.kapitolgroup.com.au/i/data/api/mfiles` |
+| `MFILES_CLIENT_ID` | M-Files API client ID header value | Yes* | - | `kapitol-tender-app` |
+| `MFILES_CLIENT_SECRET` | M-Files API client secret header value | Yes* | - | `********************************` |
+
+**Notes:**
+- \* Required for M-Files project lookup endpoint (`GET /api/mfiles/projects`)
+- `MFILES_CLIENT_SECRET` should be stored as a **secret** in Azure Container Apps
+- `MFILES_CLIENT_ID` and `MFILES_BASE_URL` are non-secret environment variables
+
 ### Webhook Security Configuration
 
 | Variable | Description | Required | Default | Example |
@@ -165,6 +178,7 @@ Environment variables are automatically configured via Bicep templates:
 - ✅ `METADATA_STORE_MODE` - Defaults to `blob`
 - ✅ `METADATA_READ_FALLBACK` - Defaults to `true`
 - ✅ `UIPATH_MOCK_MODE` - Set to `true` by default
+- ⚠️ `MFILES_BASE_URL`, `MFILES_CLIENT_ID`, `MFILES_CLIENT_SECRET` - Must be configured via `azd env set`
 - ⚠️ `UIPATH_TENANT_NAME`, `UIPATH_APP_ID`, `UIPATH_API_KEY`, `UIPATH_FOLDER_ID`, `UIPATH_QUEUE_NAME` - Must be configured via `azd env set`
 - ⚠️ `DATA_FABRIC_API_URL`, `DATA_FABRIC_API_KEY` - Must be configured via `azd env set`
 - ⚠️ `WEBHOOK_BATCH_COMPLETE_KEY` - Must be configured via `azd env set` if webhook callbacks are enabled
@@ -186,6 +200,14 @@ azd deploy
 ```bash
 azd env set DATA_FABRIC_API_URL "https://your-datafabric-url"
 azd env set DATA_FABRIC_API_KEY "your-api-key"
+azd deploy
+```
+
+**To configure M-Files integration:**
+```bash
+azd env set MFILES_BASE_URL "https://connectdev.kapitolgroup.com.au/i/data/api/mfiles"
+azd env set MFILES_CLIENT_ID "your-mfiles-client-id"
+azd env set MFILES_CLIENT_SECRET "your-mfiles-client-secret"
 azd deploy
 ```
 

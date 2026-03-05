@@ -17,6 +17,7 @@ from werkzeug.datastructures import FileStorage
 import requests
 
 from services.blob_storage import BlobStorageService, sanitize_metadata_value
+from services.mfiles_client import MFilesClient, MFilesClientError, MFilesConfigurationError
 from services.metadata_store_factory import build_metadata_store
 from services.uipath_client import UiPathClient
 from utils.auth import extract_user_info, require_auth
@@ -68,6 +69,12 @@ uipath_client = UiPathClient(
     queue_name=os.getenv('UIPATH_QUEUE_NAME'),
     data_fabric_url=os.getenv('DATA_FABRIC_API_URL'),
     data_fabric_key=os.getenv('DATA_FABRIC_API_KEY')
+)
+
+mfiles_client = MFilesClient(
+    base_url=os.getenv('MFILES_BASE_URL', ''),
+    client_id=os.getenv('MFILES_CLIENT_ID', ''),
+    client_secret=os.getenv('MFILES_CLIENT_SECRET', '')
 )
 
 # SharePoint import job tracking (in-memory)
@@ -216,8 +223,9 @@ def list_tenders():
 def create_tender():
     """Create a new tender"""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         tender_name = data.get('name')
+        tender_type = str(data.get('tender_type') or 'sharepoint').strip().lower()
 
         # Legacy fields (kept for backward compatibility)
         sharepoint_path = data.get('sharepoint_path')
@@ -233,10 +241,26 @@ def create_tender():
         output_library_id = data.get('output_library_id')
         output_folder_path = data.get('output_folder_path')
 
+        # M-Files fields
+        mfiles_project_id = str(data.get('mfiles_project_id') or '').strip()
+        mfiles_project_name = str(data.get('mfiles_project_name') or '').strip()
+
         if not tender_name:
             return jsonify({
                 'success': False,
                 'error': 'Tender name is required'
+            }), 400
+
+        if tender_type not in {'sharepoint', 'mfiles'}:
+            return jsonify({
+                'success': False,
+                'error': "tender_type must be one of: 'sharepoint', 'mfiles'"
+            }), 400
+
+        if tender_type == 'mfiles' and (not mfiles_project_id or not mfiles_project_name):
+            return jsonify({
+                'success': False,
+                'error': 'M-Files Project is required for mfiles tender type'
             }), 400
 
         user_info = extract_user_info(request.headers)
@@ -245,7 +269,8 @@ def create_tender():
 
         # Build metadata with all SharePoint identifiers
         metadata = {
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.utcnow().isoformat(),
+            'tender_type': tender_type,
         }
 
         # Add legacy fields if provided
@@ -270,6 +295,10 @@ def create_tender():
         if output_folder_path:
             metadata['output_folder_path'] = output_folder_path
 
+        if tender_type == 'mfiles':
+            metadata['mfiles_project_id'] = mfiles_project_id
+            metadata['mfiles_project_name'] = mfiles_project_name
+
         tender = metadata_store.create_tender(
             tender_name=tender_name,
             created_by=user_info.get('name', 'Unknown'),
@@ -286,6 +315,36 @@ def create_tender():
         return jsonify({
             'success': False,
             'error': str(e)
+        }), 500
+
+
+@app.get('/api/mfiles/projects')
+@require_auth
+def list_mfiles_projects():
+    """List available M-Files projects for Drawing document class."""
+    try:
+        projects = mfiles_client.get_projects(doc_class='Drawing', property_name='Project')
+        return jsonify({
+            'success': True,
+            'data': projects
+        })
+    except MFilesConfigurationError as e:
+        logger.error("M-Files configuration error: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 503
+    except MFilesClientError as e:
+        logger.error("Failed to fetch M-Files projects: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 502
+    except Exception as e:
+        logger.error("Unexpected M-Files project lookup failure: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to fetch projects from M-Files'
         }), 500
 
 # UiPath API

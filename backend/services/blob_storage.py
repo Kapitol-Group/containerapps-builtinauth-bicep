@@ -292,7 +292,10 @@ class BlobStorageService:
                         'name': blob.metadata.get('tender_name', tender_id) if blob.metadata else tender_id,
                         'created_at': blob.metadata.get('created_at') if blob.metadata else None,
                         'created_by': blob.metadata.get('created_by') if blob.metadata else None,
-                        'file_count': 0
+                        'file_count': 0,
+                        'tender_type': blob.metadata.get('tender_type', 'sharepoint') if blob.metadata else 'sharepoint',
+                        'mfiles_project_id': blob.metadata.get('mfiles_project_id') if blob.metadata else None,
+                        'mfiles_project_name': blob.metadata.get('mfiles_project_name') if blob.metadata else None,
                     }
                 else:
                     # Update tender metadata from the metadata file
@@ -302,6 +305,12 @@ class BlobStorageService:
                         'created_at') if blob.metadata else None
                     tenders[tender_id]['created_by'] = blob.metadata.get(
                         'created_by') if blob.metadata else None
+                    tenders[tender_id]['tender_type'] = blob.metadata.get(
+                        'tender_type', 'sharepoint') if blob.metadata else 'sharepoint'
+                    tenders[tender_id]['mfiles_project_id'] = blob.metadata.get(
+                        'mfiles_project_id') if blob.metadata else None
+                    tenders[tender_id]['mfiles_project_name'] = blob.metadata.get(
+                        'mfiles_project_name') if blob.metadata else None
                 continue
 
             # Initialize tender if not exists (in case metadata file hasn't been seen yet)
@@ -311,7 +320,10 @@ class BlobStorageService:
                     'name': tender_id,
                     'created_at': None,
                     'created_by': None,
-                    'file_count': 0
+                    'file_count': 0,
+                    'tender_type': 'sharepoint',
+                    'mfiles_project_id': None,
+                    'mfiles_project_name': None,
                 }
 
             # Only count actual files (not directories or empty blobs)
@@ -390,12 +402,14 @@ class BlobStorageService:
             blob_client = self.container_client.get_blob_client(
                 metadata_blob_name)
             properties = blob_client.get_blob_properties()
-
-            return {
+            tender = {
                 'id': tender_id,
                 'name': properties.metadata.get('tender_name', tender_id),
                 **properties.metadata
             }
+            if 'tender_type' not in tender:
+                tender['tender_type'] = 'sharepoint'
+            return tender
         except Exception:
             return None
 
