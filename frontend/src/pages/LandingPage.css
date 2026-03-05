@@ -143,12 +143,35 @@
 
 .tender-footer {
     padding-top: 1rem;
+    padding-right: 2.75rem;
     border-top: 1px solid var(--border-color);
 }
 
 .created-by {
     font-size: 0.85rem;
     color: var(--text-muted);
+}
+
+.tender-source-logo-badge {
+    position: absolute;
+    right: 1rem;
+    bottom: 1rem;
+    border-radius: 6px;
+}
+
+.tender-source-logo-badge.is-mfiles {
+    background: rgba(28, 31, 38, 0.9);
+    padding: 0.2rem 0.35rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.tender-source-logo {
+    height: 32px;
+    width: auto;
+    display: block;
+    object-fit: contain;
+    pointer-events: none;
+    user-select: none;
 }
 
 .btn-primary {

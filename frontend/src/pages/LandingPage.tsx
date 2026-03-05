@@ -6,6 +6,32 @@ import CreateTenderModal from '../components/CreateTenderModal';
 import Dialog from '../components/Dialog';
 import './LandingPage.css';
 
+const getTenderSourceLogo = (tenderType?: string): { src: string; alt: string; variant: 'sharepoint' | 'mfiles' } | null => {
+  if (!tenderType) {
+    return null;
+  }
+
+  const normalizedType = tenderType.toLowerCase();
+
+  if (normalizedType === 'sharepoint') {
+    return {
+      src: '/32px-Microsoft_Office_SharePoint_(2019–2025).svg.png',
+      alt: 'SharePoint',
+      variant: 'sharepoint'
+    };
+  }
+
+  if (normalizedType === 'mfiles' || normalizedType === 'm-files') {
+    return {
+      src: '/M-Files_logo_blue_white.svg',
+      alt: 'M-Files',
+      variant: 'mfiles'
+    };
+  }
+
+  return null;
+};
+
 const LandingPage: React.FC = () => {
   const navigate = useNavigate();
   const [tenders, setTenders] = useState<Tender[]>([]);
@@ -122,32 +148,45 @@ const LandingPage: React.FC = () => {
           </div>
         ) : (
           <div className="tenders-grid">
-            {filteredTenders.map((tender) => (
-              <div
-                key={tender.id}
-                className="tender-card"
-                onClick={() => handleTenderClick(tender.id)}
-              >
-                <div className="tender-card-header">
-                  <h3>{tender.name}</h3>
-                  <button
-                    className="btn-delete"
-                    onClick={(e) => handleDeleteClick(e, tender.id)}
-                    disabled={deletingTenderId === tender.id}
-                    aria-label="Delete tender"
-                  >
-                    {deletingTenderId === tender.id ? '...' : '×'}
-                  </button>
+            {filteredTenders.map((tender) => {
+              const sourceLogo = getTenderSourceLogo(tender.tender_type);
+
+              return (
+                <div
+                  key={tender.id}
+                  className="tender-card"
+                  onClick={() => handleTenderClick(tender.id)}
+                >
+                  <div className="tender-card-header">
+                    <h3>{tender.name}</h3>
+                    <button
+                      className="btn-delete"
+                      onClick={(e) => handleDeleteClick(e, tender.id)}
+                      disabled={deletingTenderId === tender.id}
+                      aria-label="Delete tender"
+                    >
+                      {deletingTenderId === tender.id ? '...' : '×'}
+                    </button>
+                  </div>
+                  <div className="tender-meta">
+                    <span>Files: {tender.file_count}</span>
+                    <span>Created: {tender.created_at ? new Date(tender.created_at).toLocaleDateString() : 'Unknown'}</span>
+                  </div>
+                  <div className="tender-footer">
+                    <span className="created-by">By {tender.created_by || 'Unknown'}</span>
+                  </div>
+                  {sourceLogo && (
+                    <div className={`tender-source-logo-badge ${sourceLogo.variant === 'mfiles' ? 'is-mfiles' : ''}`}>
+                      <img
+                        src={sourceLogo.src}
+                        alt={sourceLogo.alt}
+                        className="tender-source-logo"
+                      />
+                    </div>
+                  )}
                 </div>
-                <div className="tender-meta">
-                  <span>Files: {tender.file_count}</span>
-                  <span>Created: {tender.created_at ? new Date(tender.created_at).toLocaleDateString() : 'Unknown'}</span>
-                </div>
-                <div className="tender-footer">
-                  <span className="created-by">By {tender.created_by || 'Unknown'}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
