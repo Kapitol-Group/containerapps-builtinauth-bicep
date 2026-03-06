@@ -2820,9 +2820,60 @@ def _resolve_mfiles_import_filename(download_info: Dict[str, Any], document: Dic
     return chosen
 
 
+def _ensure_unique_mfiles_filename(
+    tender_id: str,
+    category: str,
+    filename: str,
+    display_id: str,
+    used_paths: set,
+) -> str:
+    """Ensure imported M-Files filenames do not overwrite existing files."""
+    cleaned_display_id = re.sub(r'[^A-Za-z0-9._-]+', '-', str(display_id or '').strip()) or 'doc'
+    base_name, extension = os.path.splitext(filename)
+    extension = extension or ''
+
+    def candidate_path(name: str) -> str:
+        return f"{tender_id}/{category}/{name}"
+
+    first_path = candidate_path(filename)
+    if first_path not in used_paths:
+        used_paths.add(first_path)
+        return filename
+
+    second_name = f"{base_name}-{cleaned_display_id}{extension}"
+    second_path = candidate_path(second_name)
+    if second_path not in used_paths:
+        used_paths.add(second_path)
+        return second_name
+
+    counter = 2
+    while True:
+        numbered_name = f"{base_name}-{cleaned_display_id}-{counter}{extension}"
+        numbered_path = candidate_path(numbered_name)
+        if numbered_path not in used_paths:
+            used_paths.add(numbered_path)
+            return numbered_name
+        counter += 1
+
+
 def _process_mfiles_import(job_id: str, tender_id: str, documents: list, category: str, imported_by: str):
     """Background thread function to process M-Files document imports."""
     try:
+        used_paths = set()
+        try:
+            existing_files = metadata_store.list_files(tender_id, exclude_batched=False)
+            used_paths = {
+                str(file.get('path') or '').strip()
+                for file in existing_files
+                if str(file.get('path') or '').strip()
+            }
+        except Exception:
+            logger.warning(
+                "Failed to pre-load existing file paths for tender %s. Falling back to per-job path tracking only.",
+                tender_id,
+                exc_info=True
+            )
+
         for i, document in enumerate(documents):
             display_id = str(document.get('display_id') or '').strip()
             label = display_id or str(document.get('title') or 'unknown')
@@ -2845,6 +2896,13 @@ def _process_mfiles_import(job_id: str, tender_id: str, documents: list, categor
                     raise ValueError('M-Files download returned empty file content')
 
                 filename = _resolve_mfiles_import_filename(download_info, document, display_id)
+                filename = _ensure_unique_mfiles_filename(
+                    tender_id=tender_id,
+                    category=category,
+                    filename=filename,
+                    display_id=display_id,
+                    used_paths=used_paths,
+                )
                 file_stream = BytesIO(content)
                 file_storage = FileStorage(
                     stream=file_stream,

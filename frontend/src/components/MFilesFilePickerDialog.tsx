@@ -237,7 +237,7 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, filters, searchFields, propertyValuesByFieldId, loadingPropertyValuesByFieldId]);
+  }, [isOpen, filters, searchFields]);
 
   if (!isOpen) {
     return null;
@@ -350,19 +350,6 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
     } finally {
       setImportingSelection(false);
     }
-  };
-
-  const renderFileSummary = (result: MFilesSearchResult) => {
-    if (!result.file_count) {
-      return 'No file details';
-    }
-
-    const first = result.primary_filename || result.file_names?.[0] || 'Document';
-    if (result.file_count === 1) {
-      return first;
-    }
-
-    return `${first} (+${result.file_count - 1} more)`;
   };
 
   return (
@@ -583,9 +570,7 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
                     </th>
                     <th>Title</th>
                     <th>Display ID</th>
-                    <th>Files</th>
                     <th>Last Modified</th>
-                    <th>Score</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -601,9 +586,7 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
                       </td>
                       <td>{result.title}</td>
                       <td>{result.display_id}</td>
-                      <td title={result.file_names?.join(', ') || ''}>{renderFileSummary(result)}</td>
                       <td>{result.last_modified || '-'}</td>
-                      <td>{result.score == null ? '-' : result.score.toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>
