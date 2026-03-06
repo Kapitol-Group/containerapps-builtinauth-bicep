@@ -9,6 +9,13 @@ import {
     BatchWithFiles,
     BatchProgressSummaryResponse,
     BatchStatusCounts,
+    MFilesSearchField,
+    MFilesDocumentClass,
+    MFilesPropertyValue,
+    MFilesSearchCriterion,
+    MFilesSearchResponse,
+    MFilesImportDocument,
+    ImportJobStatus,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || '/api';
@@ -80,7 +87,7 @@ export const filesApi = {
         return response.data.data || [];
     },
 
-    upload: async (tenderId: string, file: File, category: string = 'uncategorized', source?: 'local' | 'sharepoint', signal?: AbortSignal): Promise<TenderFile> => {
+    upload: async (tenderId: string, file: File, category: string = 'uncategorized', source?: 'local' | 'sharepoint' | 'mfiles', signal?: AbortSignal): Promise<TenderFile> => {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('category', category);
@@ -336,6 +343,71 @@ export const mfilesApi = {
         const response = await api.get<ApiResponse<Array<{ id: string; name: string }>>>('/mfiles/projects');
         if (!response.data.success || !response.data.data) {
             throw new Error(response.data.error || 'Failed to list M-Files projects');
+        }
+        return response.data.data;
+    },
+
+    getDocumentClasses: async (): Promise<MFilesDocumentClass[]> => {
+        const response = await api.get<ApiResponse<MFilesDocumentClass[]>>('/mfiles/document-classes');
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch M-Files document classes');
+        }
+        return response.data.data;
+    },
+
+    getSearchFields: async (docClass: string): Promise<MFilesSearchField[]> => {
+        const response = await api.get<ApiResponse<MFilesSearchField[]>>('/mfiles/search-fields', {
+            params: { docClass },
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch M-Files search fields');
+        }
+        return response.data.data;
+    },
+
+    getPropertyValues: async (propertyId: number): Promise<MFilesPropertyValue[]> => {
+        const response = await api.get<ApiResponse<MFilesPropertyValue[]>>('/mfiles/property-values', {
+            params: { id: propertyId },
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch M-Files property values');
+        }
+        return response.data.data;
+    },
+
+    searchDocuments: async (payload: {
+        tender_id: string;
+        doc_class?: string;
+        keyword?: string;
+        criteria?: MFilesSearchCriterion[];
+    }): Promise<MFilesSearchResponse> => {
+        const response = await api.post<ApiResponse<MFilesSearchResponse>>('/mfiles/search', payload);
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to search M-Files documents');
+        }
+        return response.data.data;
+    },
+
+    importFiles: async (
+        tenderId: string,
+        documents: MFilesImportDocument[],
+        category: string = 'mfiles-import',
+    ): Promise<{ job_id: string; status: string; total: number }> => {
+        const response = await api.post<ApiResponse<{ job_id: string; status: string; total: number }>>('/mfiles/import-files', {
+            tender_id: tenderId,
+            documents,
+            category,
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to start M-Files import');
+        }
+        return response.data.data;
+    },
+
+    getImportJobStatus: async (jobId: string): Promise<ImportJobStatus> => {
+        const response = await api.get<ApiResponse<ImportJobStatus>>(`/mfiles/import-jobs/${jobId}`);
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to get M-Files import job status');
         }
         return response.data.data;
     },

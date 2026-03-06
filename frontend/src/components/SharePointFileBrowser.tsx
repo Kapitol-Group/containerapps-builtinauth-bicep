@@ -27,7 +27,7 @@ export const SharePointFileBrowser: React.FC<SharePointFileBrowserProps> = ({
     status: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Default site path - this should match what's used in SharePointFilePicker
   const defaultSitePath = '/sites/KapitolGroupNewBusinessTeam/Shared Documents';

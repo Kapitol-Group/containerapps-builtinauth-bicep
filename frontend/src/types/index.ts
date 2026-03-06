@@ -30,8 +30,84 @@ export interface TenderFile {
     uploaded_by: string | null;
     uploaded_at: string | null;
     last_modified: string | null;
-    source?: 'local' | 'sharepoint';
+    source?: 'local' | 'sharepoint' | 'mfiles';
     batch_id?: string;
+}
+
+export type MFilesSearchModifier =
+    | '<'
+    | 'lt'
+    | 'lte'
+    | '>'
+    | 'gt'
+    | 'gte'
+    | 'contains'
+    | 'startswith'
+    | 'equals'
+    | '='
+    | 'wild'
+    | 'quick';
+
+export interface MFilesSearchField {
+    id: number;
+    name: string;
+    required: boolean;
+    data_type?: number;
+    data_type_word?: string;
+    system_auto_fill?: boolean;
+}
+
+export interface MFilesDocumentClass {
+    id: string;
+    name: string;
+}
+
+export interface MFilesPropertyValue {
+    id: string;
+    name: string;
+}
+
+export interface MFilesSearchCriterion {
+    name: string;
+    value: string;
+    modifier: MFilesSearchModifier;
+}
+
+export interface MFilesSearchResult {
+    title: string;
+    display_id: string;
+    score: number | null;
+    single_file: boolean;
+    last_modified?: string;
+    file_count: number;
+    file_names: string[];
+    primary_filename?: string;
+}
+
+export interface MFilesSearchResponse {
+    criteria: MFilesSearchCriterion[];
+    results: MFilesSearchResult[];
+}
+
+export interface MFilesImportDocument {
+    display_id: string;
+    title?: string;
+    filename?: string;
+}
+
+export interface ImportJobStatus {
+    job_id: string;
+    tender_id: string;
+    status: 'running' | 'completed' | 'completed_with_errors' | 'failed';
+    progress: number;
+    total: number;
+    current_file: string;
+    success_count: number;
+    error_count: number;
+    errors: string[];
+    created_at: string;
+    updated_at: string;
+    completed_at?: string;
 }
 
 export interface TitleBlockCoords {

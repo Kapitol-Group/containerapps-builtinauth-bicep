@@ -4,6 +4,7 @@ import { tendersApi, filesApi, configApi, batchesApi } from '../services/api';
 import { Tender, TenderFile } from '../types';
 import FileUploadZone from '../components/FileUploadZone';
 import SharePointFileBrowser from '../components/SharePointFileBrowser';
+import MFilesFileBrowser from '../components/MFilesFileBrowser';
 import FileBrowser from '../components/FileBrowser';
 import FilePreview from '../components/FilePreview';
 import ExtractionModal from '../components/ExtractionModal';
@@ -32,6 +33,10 @@ const TenderManagementPage: React.FC = () => {
     message: '', 
     title: '' 
   });
+
+  const tenderType = tender ? (tender.tender_type || 'sharepoint').toLowerCase() : '';
+  const isMFilesTender = tenderType === 'mfiles';
+  const isSharePointTender = tender ? tenderType !== 'mfiles' : false;
 
   // Upload manager
   const uploadManager = useUploadManager(tenderId);
@@ -224,12 +229,20 @@ const TenderManagementPage: React.FC = () => {
           <>
             <div className="upload-section">
               <FileUploadZone onFilesDropped={handleFilesUploaded} disabled={isUploading} />
-              
-              {config?.sharepointBaseUrl && (
+
+              {isSharePointTender && config?.sharepointBaseUrl && (
                 <SharePointFileBrowser
                   tenderId={tenderId!}
                   defaultSharePointPath={tender?.sharepoint_folder_path}
                   sharepointBaseUrl={config.sharepointBaseUrl}
+                  onFilesImported={loadFiles}
+                />
+              )}
+
+              {isMFilesTender && (
+                <MFilesFileBrowser
+                  tenderId={tenderId!}
+                  projectName={tender?.mfiles_project_name || ''}
                   onFilesImported={loadFiles}
                 />
               )}

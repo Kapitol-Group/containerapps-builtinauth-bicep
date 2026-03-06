@@ -42,7 +42,7 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
     const [retrying, setRetrying] = useState(false);
     const [fileProgress, setFileProgress] = useState<FileProgress[]>([]);
     const [loadingProgress, setLoadingProgress] = useState(false);
-    const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     
     // Get polling interval from environment or default to 30 seconds
     const pollingInterval = parseInt(

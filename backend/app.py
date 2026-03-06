@@ -2,13 +2,15 @@ import base64
 import hmac
 import json
 import logging
+import mimetypes
 import os
+import re
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from azure.core.exceptions import ResourceNotFoundError
 from flask import Flask, jsonify, render_template, request
@@ -79,6 +81,7 @@ mfiles_client = MFilesClient(
 
 # SharePoint import job tracking (in-memory)
 sharepoint_import_jobs = {}
+mfiles_import_jobs = {}
 import_jobs_lock = threading.Lock()
 
 # Bulk upload job tracking (in-memory)
@@ -102,6 +105,14 @@ BATCH_MAX_FAILED_ATTEMPTS = int(os.getenv('BATCH_MAX_FAILED_ATTEMPTS', '3'))
 WEBHOOK_BATCH_COMPLETE_KEY_HEADER = 'X-Webhook-Key'
 WEBHOOK_BATCH_COMPLETE_KEY = os.getenv('WEBHOOK_BATCH_COMPLETE_KEY', '').strip()
 
+ALLOWED_MFILES_MODIFIERS = {
+    '<', 'lt', 'lte',
+    '>', 'gt', 'gte',
+    'contains', 'startswith',
+    'equals', '=',
+    'wild', 'quick'
+}
+
 
 def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
     error_text = sanitize_metadata_value(str(error))
@@ -124,6 +135,78 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
 def _build_submission_owner(source: str) -> str:
     host = os.getenv('HOSTNAME', 'local')
     return f"{source}:{host}:{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex[:8]}"
+
+
+def _normalize_mfiles_modifier(value: Any) -> str:
+    modifier = str(value or '').strip().lower()
+    if modifier in {'=', '<', '>'}:
+        return modifier
+    if not modifier:
+        raise ValueError('Search modifier is required')
+    if modifier not in ALLOWED_MFILES_MODIFIERS:
+        raise ValueError(f"Unsupported M-Files modifier: '{modifier}'")
+    return modifier
+
+
+def _normalize_mfiles_criteria(raw_criteria: Any) -> List[Dict[str, str]]:
+    if raw_criteria is None:
+        return []
+    if not isinstance(raw_criteria, list):
+        raise ValueError('criteria must be an array')
+
+    normalized: List[Dict[str, str]] = []
+    reserved_names = {'project', 'class', 'keyword'}
+
+    for index, item in enumerate(raw_criteria):
+        if not isinstance(item, dict):
+            raise ValueError(f'criteria[{index}] must be an object')
+
+        name = str(item.get('name') or '').strip()
+        value = str(item.get('value') or '').strip()
+        modifier = _normalize_mfiles_modifier(item.get('modifier'))
+
+        if not name and not value:
+            continue
+        if not name or not value:
+            raise ValueError(f'criteria[{index}] must include name and value')
+
+        if name.lower() in reserved_names:
+            continue
+
+        normalized.append({
+            'name': name,
+            'value': value,
+            'modifier': modifier,
+        })
+
+    return normalized
+
+
+def _require_mfiles_tender(tender_id: str):
+    tender = metadata_store.get_tender(tender_id)
+    if not tender:
+        return None, (jsonify({
+            'success': False,
+            'error': 'Tender not found'
+        }), 404)
+
+    tender_type = str(tender.get('tender_type') or 'sharepoint').strip().lower()
+    if tender_type != 'mfiles':
+        return None, (jsonify({
+            'success': False,
+            'error': 'M-Files operations are only supported for mfiles tenders'
+        }), 400)
+
+    return tender, None
+
+
+def _safe_import_filename(name: str) -> str:
+    candidate = str(name or '').strip()
+    if not candidate:
+        return ''
+    candidate = candidate.replace('\\', '/').split('/')[-1]
+    candidate = re.sub(r'[\x00-\x1f<>:"/\\|?*]+', '_', candidate).strip().strip('.')
+    return candidate[:240]
 
 
 def _mark_batch_submission_failed(tender_id: str, batch_id: str, error: object,
@@ -345,6 +428,359 @@ def list_mfiles_projects():
         return jsonify({
             'success': False,
             'error': 'Failed to fetch projects from M-Files'
+        }), 500
+
+
+@app.get('/api/mfiles/document-classes')
+@require_auth
+def list_mfiles_document_classes():
+    """List available M-Files document classes."""
+    try:
+        document_classes = mfiles_client.get_document_classes()
+        return jsonify({
+            'success': True,
+            'data': document_classes
+        })
+    except MFilesConfigurationError as e:
+        logger.error("M-Files configuration error: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 503
+    except MFilesClientError as e:
+        logger.error("Failed to fetch M-Files document classes: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 502
+    except Exception as e:
+        logger.error("Unexpected M-Files class lookup failure: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to fetch document classes from M-Files'
+        }), 500
+
+
+@app.get('/api/mfiles/search-fields')
+@require_auth
+def list_mfiles_search_fields():
+    """List searchable field definitions for a given M-Files document class."""
+    try:
+        doc_class = str(request.args.get('docClass') or 'Drawing').strip() or 'Drawing'
+        fields = mfiles_client.get_search_fields(doc_class=doc_class)
+        return jsonify({
+            'success': True,
+            'data': fields
+        })
+    except MFilesConfigurationError as e:
+        logger.error("M-Files configuration error: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 503
+    except MFilesClientError as e:
+        logger.error("Failed to fetch M-Files search fields: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 502
+    except Exception as e:
+        logger.error("Unexpected M-Files search field lookup failure: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to fetch search fields from M-Files'
+        }), 500
+
+
+@app.get('/api/mfiles/property-values')
+@require_auth
+def list_mfiles_property_values():
+    """List allowed values for an M-Files property definition."""
+    try:
+        raw_property_id = request.args.get('id')
+        if raw_property_id is None:
+            return jsonify({
+                'success': False,
+                'error': 'Property id is required'
+            }), 400
+
+        try:
+            property_id = int(raw_property_id)
+        except (TypeError, ValueError):
+            return jsonify({
+                'success': False,
+                'error': 'Property id must be an integer'
+            }), 400
+
+        values = mfiles_client.get_property_values(property_id)
+        return jsonify({
+            'success': True,
+            'data': values
+        })
+    except MFilesConfigurationError as e:
+        logger.error("M-Files configuration error: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 503
+    except MFilesClientError as e:
+        logger.error("Failed to fetch M-Files property values: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 502
+    except Exception as e:
+        logger.error("Unexpected M-Files property values failure: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to fetch property values from M-Files'
+        }), 500
+
+
+@app.post('/api/mfiles/search')
+@require_auth
+def search_mfiles_documents():
+    """Search M-Files documents for a tender using metadata criteria."""
+    try:
+        data = request.get_json(silent=True) or {}
+        tender_id = str(data.get('tender_id') or '').strip()
+        if not tender_id:
+            return jsonify({
+                'success': False,
+                'error': 'tender_id is required'
+            }), 400
+
+        tender, error_response = _require_mfiles_tender(tender_id)
+        if error_response:
+            return error_response
+
+        locked_project = str(tender.get('mfiles_project_name') or '').strip()
+        if not locked_project:
+            return jsonify({
+                'success': False,
+                'error': 'Tender is missing mfiles_project_name'
+            }), 400
+
+        doc_class = str(data.get('doc_class') or data.get('class') or 'Drawing').strip()
+        keyword = str(data.get('keyword') or '').strip()
+        user_criteria = _normalize_mfiles_criteria(data.get('criteria'))
+
+        criteria: List[Dict[str, str]] = [{
+            'name': 'Project',
+            'value': locked_project,
+            'modifier': '=',
+        }]
+
+        if doc_class:
+            criteria.append({
+                'name': 'Class',
+                'value': doc_class,
+                'modifier': '=',
+            })
+
+        if keyword:
+            criteria.append({
+                'name': 'keyword',
+                'value': keyword,
+                'modifier': 'quick',
+            })
+
+        criteria.extend(user_criteria)
+
+        raw_results = mfiles_client.search_documents(criteria)
+        normalized_results = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+
+            display_id = str(item.get('DisplayID') or '').strip()
+            if not display_id:
+                continue
+
+            files = item.get('Files')
+            file_names: List[str] = []
+            if isinstance(files, list):
+                for file_item in files:
+                    if not isinstance(file_item, dict):
+                        continue
+                    file_name = str(file_item.get('Name') or '').strip()
+                    if file_name:
+                        file_names.append(file_name)
+
+            raw_score = item.get('Score')
+            try:
+                score = float(raw_score) if raw_score is not None else None
+            except (TypeError, ValueError):
+                score = None
+
+            normalized_results.append({
+                'title': str(item.get('Title') or '').strip() or display_id,
+                'display_id': display_id,
+                'score': score,
+                'single_file': bool(item.get('SingleFile', False)),
+                'last_modified': item.get('LastModified') or item.get('LastModifiedDisplayValue'),
+                'file_count': len(file_names),
+                'file_names': file_names,
+                'primary_filename': file_names[0] if file_names else '',
+            })
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'criteria': criteria,
+                'results': normalized_results
+            }
+        })
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except MFilesConfigurationError as e:
+        logger.error("M-Files configuration error: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 503
+    except MFilesClientError as e:
+        logger.error("M-Files document search failed: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 502
+    except Exception as e:
+        logger.error("Unexpected M-Files search failure: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to search M-Files documents'
+        }), 500
+
+
+@app.post('/api/mfiles/import-files')
+@require_auth
+def import_mfiles_files():
+    """Start background import job for selected M-Files documents."""
+    try:
+        data = request.get_json(silent=True) or {}
+        tender_id = str(data.get('tender_id') or '').strip()
+        documents = data.get('documents') or []
+        category = str(data.get('category') or 'mfiles-import').strip() or 'mfiles-import'
+
+        if not tender_id:
+            return jsonify({
+                'success': False,
+                'error': 'tender_id is required'
+            }), 400
+
+        if not isinstance(documents, list) or not documents:
+            return jsonify({
+                'success': False,
+                'error': 'documents must be a non-empty array'
+            }), 400
+
+        tender, error_response = _require_mfiles_tender(tender_id)
+        if error_response:
+            return error_response
+
+        selected_documents = []
+        for index, item in enumerate(documents):
+            if not isinstance(item, dict):
+                return jsonify({
+                    'success': False,
+                    'error': f'documents[{index}] must be an object'
+                }), 400
+
+            display_id = str(
+                item.get('display_id')
+                or item.get('displayId')
+                or item.get('id')
+                or ''
+            ).strip()
+            if not display_id:
+                return jsonify({
+                    'success': False,
+                    'error': f'documents[{index}] is missing display_id'
+                }), 400
+
+            selected_documents.append({
+                'display_id': display_id,
+                'title': str(item.get('title') or '').strip(),
+                'filename': str(item.get('filename') or item.get('name') or '').strip(),
+            })
+
+        user_info = extract_user_info(request.headers)
+        imported_by = user_info.get('name', 'M-Files Import')
+
+        job_id = str(uuid.uuid4())
+        with import_jobs_lock:
+            mfiles_import_jobs[job_id] = {
+                'job_id': job_id,
+                'tender_id': tender_id,
+                'tender_name': tender.get('name', tender_id),
+                'status': 'running',
+                'progress': 0,
+                'total': len(selected_documents),
+                'current_file': '',
+                'success_count': 0,
+                'error_count': 0,
+                'errors': [],
+                'created_at': datetime.utcnow().isoformat(),
+                'updated_at': datetime.utcnow().isoformat()
+            }
+
+        import_thread = threading.Thread(
+            target=_process_mfiles_import,
+            args=(job_id, tender_id, selected_documents, category, imported_by),
+            daemon=True
+        )
+        import_thread.start()
+
+        logger.info(
+            "Started M-Files import job %s for tender %s with %s documents",
+            job_id,
+            tender_id,
+            len(selected_documents),
+        )
+
+        return jsonify({
+            'success': True,
+            'data': {
+                'job_id': job_id,
+                'status': 'running',
+                'total': len(selected_documents),
+            }
+        })
+    except Exception as e:
+        logger.error("Failed to start M-Files import: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@app.get('/api/mfiles/import-jobs/<job_id>')
+@require_auth
+def get_mfiles_import_job_status(job_id: str):
+    """Get status of an M-Files import job."""
+    try:
+        with import_jobs_lock:
+            job = mfiles_import_jobs.get(job_id)
+
+        if not job:
+            return jsonify({
+                'success': False,
+                'error': 'Job not found'
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'data': job
+        })
+    except Exception as e:
+        logger.error("Failed to get M-Files import job status: %s", e, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e)
         }), 500
 
 # UiPath API
@@ -2358,6 +2794,150 @@ def get_sharepoint_import_job_status(job_id: str):
         }), 500
 
 
+def _resolve_mfiles_import_filename(download_info: Dict[str, Any], document: Dict[str, str], display_id: str) -> str:
+    candidates = [
+        download_info.get('filename'),
+        document.get('filename'),
+        document.get('title'),
+    ]
+    chosen = ''
+    for candidate in candidates:
+        safe_name = _safe_import_filename(str(candidate or ''))
+        if safe_name:
+            chosen = safe_name
+            break
+
+    content_type = str(download_info.get('content_type') or '').split(';')[0].strip().lower()
+    if chosen and '.' not in chosen and content_type:
+        guessed_extension = mimetypes.guess_extension(content_type)
+        if guessed_extension:
+            chosen = f"{chosen}{guessed_extension}"
+
+    if not chosen:
+        guessed_extension = mimetypes.guess_extension(content_type) if content_type else None
+        chosen = f"mfiles-{display_id}{guessed_extension or '.bin'}"
+
+    return chosen
+
+
+def _process_mfiles_import(job_id: str, tender_id: str, documents: list, category: str, imported_by: str):
+    """Background thread function to process M-Files document imports."""
+    try:
+        for i, document in enumerate(documents):
+            display_id = str(document.get('display_id') or '').strip()
+            label = display_id or str(document.get('title') or 'unknown')
+
+            with import_jobs_lock:
+                if job_id in mfiles_import_jobs:
+                    mfiles_import_jobs[job_id]['current_file'] = label
+                    mfiles_import_jobs[job_id]['progress'] = i
+                    mfiles_import_jobs[job_id]['updated_at'] = datetime.utcnow().isoformat()
+
+            try:
+                if not display_id:
+                    raise ValueError('Document display_id is missing')
+
+                download_info = mfiles_client.download_document_contents(display_id)
+                content = download_info.get('content')
+                if not isinstance(content, (bytes, bytearray)):
+                    raise ValueError('M-Files download did not return file content')
+                if len(content) == 0:
+                    raise ValueError('M-Files download returned empty file content')
+
+                filename = _resolve_mfiles_import_filename(download_info, document, display_id)
+                file_stream = BytesIO(content)
+                file_storage = FileStorage(
+                    stream=file_stream,
+                    filename=filename,
+                    content_type=str(download_info.get('content_type') or 'application/octet-stream')
+                )
+
+                file_metadata = blob_service.upload_file(
+                    tender_id=tender_id,
+                    file=file_storage,
+                    category=category,
+                    uploaded_by=imported_by,
+                    source='mfiles'
+                )
+
+                try:
+                    metadata_store.upsert_file_record(tender_id, file_metadata)
+                except Exception:
+                    logger.error(
+                        "M-Files import metadata write failed for %s. Deleting blob for compensation.",
+                        file_metadata.get('path'),
+                        exc_info=True
+                    )
+                    try:
+                        blob_service.delete_file(tender_id, file_metadata.get('path'))
+                    except Exception:
+                        logger.error(
+                            "M-Files import compensation failed for %s",
+                            file_metadata.get('path'),
+                            exc_info=True
+                        )
+                    raise
+
+                with import_jobs_lock:
+                    if job_id in mfiles_import_jobs:
+                        mfiles_import_jobs[job_id]['success_count'] += 1
+
+                logger.info(
+                    "Successfully imported M-Files document %s as %s (job %s)",
+                    display_id,
+                    filename,
+                    job_id
+                )
+
+            except Exception as item_error:
+                error_msg = f"{label}: {str(item_error)}"
+                logger.error(
+                    "Failed to import M-Files document %s in job %s: %s",
+                    label,
+                    job_id,
+                    item_error
+                )
+                with import_jobs_lock:
+                    if job_id in mfiles_import_jobs:
+                        mfiles_import_jobs[job_id]['error_count'] += 1
+                        mfiles_import_jobs[job_id]['errors'].append(error_msg)
+
+        success_count = 0
+        error_count = 0
+        with import_jobs_lock:
+            if job_id in mfiles_import_jobs:
+                job = mfiles_import_jobs[job_id]
+                job['status'] = 'completed' if job['error_count'] == 0 else 'completed_with_errors'
+                job['progress'] = len(documents)
+                job['current_file'] = ''
+                job['updated_at'] = datetime.utcnow().isoformat()
+                job['completed_at'] = datetime.utcnow().isoformat()
+                success_count = job['success_count']
+                error_count = job['error_count']
+
+        logger.info(
+            "M-Files import job %s completed: %s succeeded, %s failed",
+            job_id,
+            success_count,
+            error_count
+        )
+
+        cleanup_thread = threading.Thread(
+            target=_cleanup_import_job,
+            args=(job_id, 'mfiles'),
+            daemon=True
+        )
+        cleanup_thread.start()
+
+    except Exception as e:
+        logger.error("Fatal error in M-Files import job %s: %s", job_id, e, exc_info=True)
+        with import_jobs_lock:
+            if job_id in mfiles_import_jobs:
+                mfiles_import_jobs[job_id]['status'] = 'failed'
+                mfiles_import_jobs[job_id]['errors'].append(f"Fatal error: {str(e)}")
+                mfiles_import_jobs[job_id]['updated_at'] = datetime.utcnow().isoformat()
+
+
 def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, items: list, category: str):
     """Background thread function to process SharePoint file imports"""
     try:
@@ -2474,7 +3054,7 @@ def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, i
         # Schedule cleanup
         cleanup_thread = threading.Thread(
             target=_cleanup_import_job,
-            args=(job_id,)
+            args=(job_id, 'sharepoint')
         )
         cleanup_thread.daemon = True
         cleanup_thread.start()
@@ -2492,13 +3072,16 @@ def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, i
                 ).isoformat()
 
 
-def _cleanup_import_job(job_id: str):
-    """Remove completed job from memory after cleanup period"""
+def _cleanup_import_job(job_id: str, source: str = 'sharepoint'):
+    """Remove completed import jobs from memory after cleanup period."""
     time.sleep(JOB_CLEANUP_SECONDS)
     with import_jobs_lock:
-        if job_id in sharepoint_import_jobs:
+        if source == 'mfiles' and job_id in mfiles_import_jobs:
+            del mfiles_import_jobs[job_id]
+            logger.info(f"Cleaned up M-Files import job {job_id}")
+        elif job_id in sharepoint_import_jobs:
             del sharepoint_import_jobs[job_id]
-            logger.info(f"Cleaned up import job {job_id}")
+            logger.info(f"Cleaned up SharePoint import job {job_id}")
 
 
 # Health check

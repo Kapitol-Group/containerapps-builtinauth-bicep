@@ -21,7 +21,7 @@ const BatchList: React.FC<BatchListProps> = ({
     onReload,
 }) => {
     const [batchProgress, setBatchProgress] = useState<Record<string, BatchProgressSummary>>({});
-    const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const pollInFlightRef = useRef(false);
     const onReloadRef = useRef(onReload);
     onReloadRef.current = onReload;

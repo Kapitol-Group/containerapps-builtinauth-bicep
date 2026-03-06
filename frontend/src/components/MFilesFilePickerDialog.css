@@ -1,0 +1,254 @@
+.mfiles-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.mfiles-picker-dialog {
+  width: min(1200px, 100%);
+  max-height: calc(100vh - 2.5rem);
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mfiles-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.mfiles-picker-header h2 {
+  margin: 0;
+  color: #1e293b;
+  font-size: 1.15rem;
+}
+
+.mfiles-picker-close {
+  border: none;
+  background: transparent;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #334155;
+}
+
+.mfiles-search-panel {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.mfiles-search-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.mfiles-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.mfiles-form-field-keyword {
+  grid-column: 1 / -1;
+}
+
+.mfiles-form-field label {
+  font-size: 0.82rem;
+  color: #334155;
+  font-weight: 600;
+}
+
+.mfiles-form-field input,
+.mfiles-form-field select,
+.mfiles-filter-row input,
+.mfiles-filter-row select {
+  height: 2.25rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0 0.65rem;
+  font-size: 0.9rem;
+}
+
+.mfiles-form-field input[readonly] {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.mfiles-filter-section {
+  border: 1px solid #dbe7ff;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.mfiles-filter-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.mfiles-filter-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #1e293b;
+}
+
+.mfiles-filter-empty {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.86rem;
+}
+
+.mfiles-filter-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.mfiles-filter-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(125px, 0.8fr) minmax(180px, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.mfiles-filter-remove {
+  border: 1px solid #ef4444;
+  color: #b91c1c;
+  background: #fff5f5;
+  border-radius: 6px;
+  height: 2.25rem;
+  padding: 0 0.8rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.mfiles-helper-text {
+  margin: 0.4rem 0 0;
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.mfiles-error-text {
+  margin: 0.45rem 0 0;
+  color: #b91c1c;
+  font-size: 0.84rem;
+}
+
+.mfiles-search-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mfiles-results-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding: 0.9rem 1.25rem;
+}
+
+.mfiles-results-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.mfiles-results-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: #1e293b;
+}
+
+.mfiles-results-body {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: auto;
+  min-height: 220px;
+  max-height: 340px;
+}
+
+.mfiles-empty-state {
+  margin: 0;
+  padding: 1.2rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.mfiles-results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.mfiles-results-table th,
+.mfiles-results-table td {
+  border-bottom: 1px solid #edf2f7;
+  padding: 0.55rem 0.6rem;
+  text-align: left;
+  color: #334155;
+  vertical-align: top;
+}
+
+.mfiles-results-table th {
+  background: #f8fafc;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.mfiles-results-table td:first-child,
+.mfiles-results-table th:first-child {
+  width: 40px;
+  text-align: center;
+}
+
+.mfiles-picker-footer {
+  border-top: 1px solid #e2e8f0;
+  padding: 0.9rem 1.25rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+@media (max-width: 980px) {
+  .mfiles-search-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mfiles-form-field-keyword {
+    grid-column: auto;
+  }
+
+  .mfiles-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mfiles-filter-remove {
+    justify-self: start;
+  }
+
+  .mfiles-results-table {
+    min-width: 760px;
+  }
+}
