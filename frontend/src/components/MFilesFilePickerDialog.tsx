@@ -378,7 +378,7 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
         <form className="mfiles-search-panel" onSubmit={handleSearch}>
           <div className="mfiles-search-grid">
             <div className="mfiles-form-field">
-              <label>Project (Locked)</label>
+              <label>Project</label>
               <input type="text" value={projectName || 'Not configured'} readOnly />
             </div>
 
@@ -570,6 +570,7 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
                     </th>
                     <th>Title</th>
                     <th>Display ID</th>
+                    <th>Type</th>
                     <th>Last Modified</th>
                   </tr>
                 </thead>
@@ -586,6 +587,7 @@ const MFilesFilePickerDialog: React.FC<MFilesFilePickerDialogProps> = ({
                       </td>
                       <td>{result.title}</td>
                       <td>{result.display_id}</td>
+                      <td>{result.file_type ? result.file_type.toUpperCase() : '-'}</td>
                       <td>{result.last_modified || '-'}</td>
                     </tr>
                   ))}

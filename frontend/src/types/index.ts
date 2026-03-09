@@ -82,6 +82,7 @@ export interface MFilesSearchResult {
     file_count: number;
     file_names: string[];
     primary_filename?: string;
+    file_type?: string;
 }
 
 export interface MFilesSearchResponse {

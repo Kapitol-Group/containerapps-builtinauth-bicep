@@ -599,6 +599,7 @@ def search_mfiles_documents():
 
             files = item.get('Files')
             file_names: List[str] = []
+            file_type = ''
             if isinstance(files, list):
                 for file_item in files:
                     if not isinstance(file_item, dict):
@@ -606,6 +607,13 @@ def search_mfiles_documents():
                     file_name = str(file_item.get('Name') or '').strip()
                     if file_name:
                         file_names.append(file_name)
+                        if not file_type and '.' in file_name:
+                            file_type = file_name.rsplit('.', 1)[-1].strip().lower()
+
+                    if not file_type:
+                        extension = str(file_item.get('Extension') or '').strip().lower().lstrip('.')
+                        if extension:
+                            file_type = extension
 
             raw_score = item.get('Score')
             try:
@@ -622,6 +630,7 @@ def search_mfiles_documents():
                 'file_count': len(file_names),
                 'file_names': file_names,
                 'primary_filename': file_names[0] if file_names else '',
+                'file_type': file_type,
             })
 
         return jsonify({
