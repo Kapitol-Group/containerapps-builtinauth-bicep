@@ -55,6 +55,8 @@ export interface MFilesSearchField {
     data_type?: number;
     data_type_word?: string;
     system_auto_fill?: boolean;
+    automation_managed?: boolean;
+    queue_required?: boolean;
 }
 
 export interface MFilesDocumentClass {
@@ -96,6 +98,17 @@ export interface MFilesImportDocument {
     filename?: string;
 }
 
+export interface MFilesExtractionProperty {
+    property_id: number;
+    property_name: string;
+    data_type?: number;
+    data_type_word?: string;
+    value?: string;
+    value_id?: string;
+    values?: string[];
+    value_ids?: string[];
+}
+
 export interface ImportJobStatus {
     job_id: string;
     tender_id: string;
@@ -123,6 +136,8 @@ export interface Batch {
     batch_name: string;
     discipline?: string; // Legacy field, kept for backward compatibility
     destination?: string; // New field: SharePoint destination folder
+    mfiles_document_class?: string;
+    mfiles_properties?: MFilesExtractionProperty[];
     file_paths: string[];
     title_block_coords: TitleBlockCoords;
     status: 'pending' | 'submitting' | 'running' | 'completed' | 'failed';

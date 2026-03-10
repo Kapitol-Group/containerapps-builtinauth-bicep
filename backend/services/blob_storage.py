@@ -762,6 +762,12 @@ class BlobStorageService:
             'batch_id': sanitize_metadata_value(str(batch_id)),
             'batch_name': sanitize_metadata_value(str(batch_record.get('batch_name', batch_id))),
             'discipline': sanitize_metadata_value(str(batch_record.get('discipline', ''))),
+            'mfiles_document_class': sanitize_metadata_value(str(batch_record.get('mfiles_document_class', ''))),
+            'mfiles_properties': _json_dumps_compact(
+                batch_record.get('mfiles_properties', [])
+                if isinstance(batch_record.get('mfiles_properties', []), list)
+                else []
+            ),
             'file_paths': _json_dumps_compact(file_paths if isinstance(file_paths, list) else []),
             'title_block_coords': _json_dumps_compact(title_block_coords if isinstance(title_block_coords, dict) else {}),
             'status': sanitize_metadata_value(str(batch_record.get('status', 'pending'))),
@@ -795,6 +801,8 @@ class BlobStorageService:
             'batch_id': batch_id,
             'batch_name': batch_record.get('batch_name', batch_id),
             'discipline': batch_record.get('discipline'),
+            'mfiles_document_class': batch_record.get('mfiles_document_class', ''),
+            'mfiles_properties': batch_record.get('mfiles_properties', []),
             'file_paths': file_paths,
             'title_block_coords': title_block_coords,
             'status': batch_record.get('status', 'pending'),
@@ -852,6 +860,8 @@ class BlobStorageService:
             'batch_id': batch_id,
             'batch_name': sanitize_metadata_value(batch_name),
             'discipline': sanitize_metadata_value(discipline),
+            'mfiles_document_class': '',
+            'mfiles_properties': _json_dumps_compact([]),
             'file_paths': _json_dumps_compact(file_paths),
             'title_block_coords': _json_dumps_compact(title_block_coords),
             'status': 'pending',
@@ -889,6 +899,8 @@ class BlobStorageService:
             'batch_id': batch_id,
             'batch_name': batch_name,
             'discipline': discipline,
+            'mfiles_document_class': '',
+            'mfiles_properties': [],
             'file_paths': file_paths,
             'title_block_coords': title_block_coords,
             'status': 'pending',
@@ -922,10 +934,19 @@ class BlobStorageService:
         for blob in blob_list:
             if blob.metadata:
                 try:
+                    try:
+                        mfiles_properties = json.loads(blob.metadata.get('mfiles_properties', '[]'))
+                        if not isinstance(mfiles_properties, list):
+                            mfiles_properties = []
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        mfiles_properties = []
+
                     batch = {
                         'batch_id': blob.metadata.get('batch_id'),
                         'batch_name': blob.metadata.get('batch_name'),
                         'discipline': blob.metadata.get('discipline'),
+                        'mfiles_document_class': blob.metadata.get('mfiles_document_class', ''),
+                        'mfiles_properties': mfiles_properties,
                         'file_paths': json.loads(blob.metadata.get('file_paths', '[]')),
                         'title_block_coords': json.loads(blob.metadata.get('title_block_coords', '{}')),
                         'status': blob.metadata.get('status', 'pending'),
@@ -1005,10 +1026,19 @@ class BlobStorageService:
             properties = blob_client.get_blob_properties()
 
             if properties.metadata:
+                try:
+                    mfiles_properties = json.loads(properties.metadata.get('mfiles_properties', '[]'))
+                    if not isinstance(mfiles_properties, list):
+                        mfiles_properties = []
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    mfiles_properties = []
+
                 return {
                     'batch_id': properties.metadata.get('batch_id'),
                     'batch_name': properties.metadata.get('batch_name'),
                     'discipline': properties.metadata.get('discipline'),
+                    'mfiles_document_class': properties.metadata.get('mfiles_document_class', ''),
+                    'mfiles_properties': mfiles_properties,
                     'file_paths': json.loads(properties.metadata.get('file_paths', '[]')),
                     'title_block_coords': json.loads(properties.metadata.get('title_block_coords', '{}')),
                     'status': properties.metadata.get('status', 'pending'),

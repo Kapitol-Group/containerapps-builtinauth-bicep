@@ -15,6 +15,7 @@ import {
     MFilesSearchCriterion,
     MFilesSearchResponse,
     MFilesImportDocument,
+    MFilesExtractionProperty,
     ImportJobStatus,
 } from '../types';
 
@@ -237,7 +238,9 @@ export const uipathApi = {
         batchName?: string,
         sharepointFolderPath?: string,
         outputFolderPath?: string,
-        folderList?: string[]
+        folderList?: string[],
+        mfilesDocumentClass?: string,
+        mfilesProperties?: MFilesExtractionProperty[],
     ): Promise<{ batch_id: string; job_id: string; status: string; batch: Batch }> => {
         const response = await api.post<ApiResponse<{ batch_id: string; job_id: string; status: string; batch: Batch }>>('/uipath/extract', {
             tender_id: tenderId,
@@ -249,6 +252,8 @@ export const uipathApi = {
             sharepoint_folder_path: sharepointFolderPath,
             output_folder_path: outputFolderPath,
             folder_list: folderList,
+            mfiles_document_class: mfilesDocumentClass,
+            mfiles_properties: mfilesProperties,
         });
 
         if (!response.data.success || !response.data.data) {

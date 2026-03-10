@@ -10,7 +10,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from azure.core.exceptions import ResourceNotFoundError
 from flask import Flask, jsonify, render_template, request
@@ -76,7 +76,8 @@ uipath_client = UiPathClient(
 mfiles_client = MFilesClient(
     base_url=os.getenv('MFILES_BASE_URL', ''),
     client_id=os.getenv('MFILES_CLIENT_ID', ''),
-    client_secret=os.getenv('MFILES_CLIENT_SECRET', '')
+    client_secret=os.getenv('MFILES_CLIENT_SECRET', ''),
+    timeout_seconds=int(os.getenv('MFILES_TIMEOUT_SECONDS', '30'))
 )
 
 # SharePoint import job tracking (in-memory)
@@ -103,7 +104,8 @@ BATCH_PENDING_RETRY_MIN_AGE_MINUTES = int(
     os.getenv('BATCH_PENDING_RETRY_MIN_AGE_MINUTES', '5'))
 BATCH_MAX_FAILED_ATTEMPTS = int(os.getenv('BATCH_MAX_FAILED_ATTEMPTS', '3'))
 WEBHOOK_BATCH_COMPLETE_KEY_HEADER = 'X-Webhook-Key'
-WEBHOOK_BATCH_COMPLETE_KEY = os.getenv('WEBHOOK_BATCH_COMPLETE_KEY', '').strip()
+WEBHOOK_BATCH_COMPLETE_KEY = os.getenv(
+    'WEBHOOK_BATCH_COMPLETE_KEY', '').strip()
 
 ALLOWED_MFILES_MODIFIERS = {
     '<', 'lt', 'lte',
@@ -112,6 +114,95 @@ ALLOWED_MFILES_MODIFIERS = {
     'equals', '=',
     'wild', 'quick'
 }
+
+DEFAULT_MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH = os.path.join(
+    os.path.dirname(__file__),
+    'config',
+    'mfiles_automation_managed_properties.json'
+)
+MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH = os.getenv(
+    'MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH',
+    DEFAULT_MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH
+).strip() or DEFAULT_MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH
+
+
+def _load_mfiles_automation_managed_properties(path: str) -> Dict[str, Set[int]]:
+    resolved: Dict[str, Set[int]] = {}
+    if not path:
+        return resolved
+
+    if not os.path.exists(path):
+        logger.info(
+            "M-Files automation-managed properties file not found at %s; defaulting to empty mapping",
+            path
+        )
+        return resolved
+
+    try:
+        with open(path, 'r', encoding='utf-8') as file_handle:
+            payload = json.load(file_handle)
+    except Exception as exc:
+        logger.error(
+            "Failed to parse M-Files automation-managed properties file at %s: %s",
+            path,
+            exc
+        )
+        return resolved
+
+    if not isinstance(payload, dict):
+        logger.error(
+            "M-Files automation-managed properties config at %s must be a JSON object",
+            path
+        )
+        return resolved
+
+    for raw_doc_class, raw_values in payload.items():
+        doc_class = str(raw_doc_class or '').strip().lower()
+        if not doc_class:
+            continue
+
+        if not isinstance(raw_values, list):
+            logger.warning(
+                "Ignoring automation-managed properties for doc class '%s' because value is not an array",
+                raw_doc_class
+            )
+            continue
+
+        property_ids: Set[int] = set()
+        for raw_property_id in raw_values:
+            try:
+                property_ids.add(int(raw_property_id))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Ignoring invalid automation-managed property id '%s' for doc class '%s'",
+                    raw_property_id,
+                    raw_doc_class
+                )
+        resolved[doc_class] = property_ids
+
+    return resolved
+
+
+MFILES_AUTOMATION_MANAGED_PROPERTIES = _load_mfiles_automation_managed_properties(
+    MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH
+)
+logger.info(
+    "Loaded M-Files automation-managed property mapping from %s (doc classes: %s)",
+    MFILES_AUTOMATION_MANAGED_PROPERTIES_PATH,
+    len(MFILES_AUTOMATION_MANAGED_PROPERTIES)
+)
+
+
+def _get_mfiles_automation_managed_property_ids(doc_class: str) -> Set[int]:
+    normalized_doc_class = str(doc_class or '').strip().lower()
+    combined: Set[int] = set(
+        MFILES_AUTOMATION_MANAGED_PROPERTIES.get('*', set())
+    )
+    if normalized_doc_class:
+        combined.update(
+            MFILES_AUTOMATION_MANAGED_PROPERTIES.get(normalized_doc_class, set())
+        )
+    return combined
 
 
 def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
@@ -190,7 +281,8 @@ def _require_mfiles_tender(tender_id: str):
             'error': 'Tender not found'
         }), 404)
 
-    tender_type = str(tender.get('tender_type') or 'sharepoint').strip().lower()
+    tender_type = str(tender.get('tender_type')
+                      or 'sharepoint').strip().lower()
     if tender_type != 'mfiles':
         return None, (jsonify({
             'success': False,
@@ -205,8 +297,214 @@ def _safe_import_filename(name: str) -> str:
     if not candidate:
         return ''
     candidate = candidate.replace('\\', '/').split('/')[-1]
-    candidate = re.sub(r'[\x00-\x1f<>:"/\\|?*]+', '_', candidate).strip().strip('.')
+    candidate = re.sub(r'[\x00-\x1f<>:"/\\|?*]+', '_',
+                       candidate).strip().strip('.')
     return candidate[:240]
+
+
+def _normalize_mfiles_property_payload(raw_properties: Any) -> List[Dict[str, Any]]:
+    if raw_properties is None:
+        return []
+    if not isinstance(raw_properties, list):
+        raise ValueError('mfiles_properties must be an array')
+
+    normalized: List[Dict[str, Any]] = []
+    for index, item in enumerate(raw_properties):
+        if not isinstance(item, dict):
+            raise ValueError(f'mfiles_properties[{index}] must be an object')
+
+        raw_property_id = item.get('property_id')
+        if raw_property_id is None:
+            raw_property_id = item.get('id')
+        if raw_property_id is None:
+            raise ValueError(
+                f"mfiles_properties[{index}] is missing 'property_id'")
+
+        try:
+            property_id = int(raw_property_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"mfiles_properties[{index}].property_id must be an integer"
+            ) from exc
+
+        property_name = str(
+            item.get('property_name') or item.get('name') or ''
+        ).strip()
+        if not property_name:
+            raise ValueError(
+                f"mfiles_properties[{index}] is missing 'property_name'"
+            )
+
+        normalized_item: Dict[str, Any] = {
+            'property_id': property_id,
+            'property_name': property_name,
+        }
+
+        raw_data_type = item.get('data_type')
+        if raw_data_type is not None and raw_data_type != '':
+            try:
+                normalized_item['data_type'] = int(raw_data_type)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"mfiles_properties[{index}].data_type must be an integer"
+                ) from exc
+
+        raw_data_type_word = item.get('data_type_word')
+        if raw_data_type_word is not None and str(raw_data_type_word).strip():
+            normalized_item['data_type_word'] = str(raw_data_type_word).strip()
+
+        value = item.get('value')
+        if value is not None:
+            normalized_item['value'] = str(value).strip()
+
+        value_id = item.get('value_id')
+        if value_id is not None:
+            normalized_item['value_id'] = str(value_id).strip()
+
+        value_ids_raw = item.get('value_ids')
+        if value_ids_raw is not None:
+            if not isinstance(value_ids_raw, list):
+                raise ValueError(
+                    f"mfiles_properties[{index}].value_ids must be an array"
+                )
+            normalized_item['value_ids'] = [
+                str(entry).strip() for entry in value_ids_raw if str(entry).strip()
+            ]
+
+        values_raw = item.get('values')
+        if values_raw is not None:
+            if not isinstance(values_raw, list):
+                raise ValueError(
+                    f"mfiles_properties[{index}].values must be an array"
+                )
+            normalized_item['values'] = [
+                str(entry).strip() for entry in values_raw if str(entry).strip()
+            ]
+
+        normalized.append(normalized_item)
+
+    return normalized
+
+
+def _validate_mfiles_extraction_properties(
+    tender: Dict[str, Any],
+    mfiles_document_class: str,
+    raw_properties: Any,
+) -> List[Dict[str, Any]]:
+    submitted_properties = _normalize_mfiles_property_payload(raw_properties)
+    automation_managed_property_ids = _get_mfiles_automation_managed_property_ids(
+        mfiles_document_class
+    )
+    required_fields: List[Dict[str, Any]] = []
+    for field in mfiles_client.get_search_fields(doc_class=mfiles_document_class):
+        if not field.get('required') or field.get('system_auto_fill'):
+            continue
+        try:
+            field_id = int(field.get('id'))
+        except (TypeError, ValueError):
+            continue
+        if field_id in automation_managed_property_ids:
+            continue
+        required_fields.append(field)
+
+    by_id: Dict[int, Dict[str, Any]] = {}
+    by_name: Dict[str, Dict[str, Any]] = {}
+    for item in submitted_properties:
+        by_id[item['property_id']] = item
+        by_name[item['property_name'].strip().lower()] = item
+
+    locked_project = str(tender.get('mfiles_project_name') or '').strip()
+    validated_properties: List[Dict[str, Any]] = []
+
+    for field in required_fields:
+        field_name = str(field.get('name') or '').strip()
+        if not field_name:
+            continue
+
+        try:
+            field_id = int(field.get('id'))
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"M-Files required field '{field_name}' has invalid id")
+
+        submitted = by_id.get(field_id) or by_name.get(field_name.lower())
+        if not submitted:
+            raise ValueError(
+                f"Missing mandatory M-Files property: '{field_name}'")
+
+        data_type = field.get('data_type')
+        try:
+            data_type_value = int(data_type) if data_type is not None else None
+        except (TypeError, ValueError):
+            data_type_value = None
+
+        normalized_property: Dict[str, Any] = {
+            'property_id': field_id,
+            'property_name': field_name,
+            'data_type': data_type_value if data_type_value is not None else submitted.get('data_type'),
+            'data_type_word': field.get('data_type_word') or submitted.get('data_type_word') or '',
+        }
+
+        if data_type_value == 10:
+            value_ids = submitted.get('value_ids')
+            values = submitted.get('values')
+            if not isinstance(value_ids, list) or not value_ids:
+                raise ValueError(
+                    f"Mandatory property '{field_name}' requires value_ids")
+            if not isinstance(values, list) or not values:
+                raise ValueError(
+                    f"Mandatory property '{field_name}' requires values")
+            normalized_property['value_ids'] = value_ids
+            normalized_property['values'] = values
+
+            if field_name.lower() == 'project':
+                if not locked_project:
+                    raise ValueError(
+                        "Tender is missing mfiles_project_name for mandatory Project property"
+                    )
+                if locked_project.lower() not in {str(v).strip().lower() for v in values}:
+                    raise ValueError(
+                        "Mandatory Project property must match tender mfiles_project_name"
+                    )
+        elif data_type_value == 9:
+            value_id = str(submitted.get('value_id') or '').strip()
+            value = str(submitted.get('value') or '').strip()
+            if not value_id or not value:
+                raise ValueError(
+                    f"Mandatory lookup property '{field_name}' requires value_id and value"
+                )
+            normalized_property['value_id'] = value_id
+            normalized_property['value'] = value
+
+            if field_name.lower() == 'project':
+                if not locked_project:
+                    raise ValueError(
+                        "Tender is missing mfiles_project_name for mandatory Project property"
+                    )
+                if value.lower() != locked_project.lower():
+                    raise ValueError(
+                        "Mandatory Project property must match tender mfiles_project_name"
+                    )
+        else:
+            value = str(submitted.get('value') or '').strip()
+            if not value:
+                raise ValueError(
+                    f"Mandatory property '{field_name}' requires value")
+            normalized_property['value'] = value
+
+            if field_name.lower() == 'project':
+                if not locked_project:
+                    raise ValueError(
+                        "Tender is missing mfiles_project_name for mandatory Project property"
+                    )
+                if value.lower() != locked_project.lower():
+                    raise ValueError(
+                        "Mandatory Project property must match tender mfiles_project_name"
+                    )
+
+        validated_properties.append(normalized_property)
+
+    return validated_properties
 
 
 def _mark_batch_submission_failed(tender_id: str, batch_id: str, error: object,
@@ -308,7 +606,8 @@ def create_tender():
     try:
         data = request.get_json(silent=True) or {}
         tender_name = data.get('name')
-        tender_type = str(data.get('tender_type') or 'sharepoint').strip().lower()
+        tender_type = str(data.get('tender_type')
+                          or 'sharepoint').strip().lower()
 
         # Legacy fields (kept for backward compatibility)
         sharepoint_path = data.get('sharepoint_path')
@@ -326,7 +625,8 @@ def create_tender():
 
         # M-Files fields
         mfiles_project_id = str(data.get('mfiles_project_id') or '').strip()
-        mfiles_project_name = str(data.get('mfiles_project_name') or '').strip()
+        mfiles_project_name = str(
+            data.get('mfiles_project_name') or '').strip()
 
         if not tender_name:
             return jsonify({
@@ -406,7 +706,8 @@ def create_tender():
 def list_mfiles_projects():
     """List available M-Files projects for Drawing document class."""
     try:
-        projects = mfiles_client.get_projects(doc_class='Drawing', property_name='Project')
+        projects = mfiles_client.get_projects(
+            doc_class='Drawing', property_name='Project')
         return jsonify({
             'success': True,
             'data': projects
@@ -424,7 +725,8 @@ def list_mfiles_projects():
             'error': str(e)
         }), 502
     except Exception as e:
-        logger.error("Unexpected M-Files project lookup failure: %s", e, exc_info=True)
+        logger.error(
+            "Unexpected M-Files project lookup failure: %s", e, exc_info=True)
         return jsonify({
             'success': False,
             'error': 'Failed to fetch projects from M-Files'
@@ -454,7 +756,8 @@ def list_mfiles_document_classes():
             'error': str(e)
         }), 502
     except Exception as e:
-        logger.error("Unexpected M-Files class lookup failure: %s", e, exc_info=True)
+        logger.error("Unexpected M-Files class lookup failure: %s",
+                     e, exc_info=True)
         return jsonify({
             'success': False,
             'error': 'Failed to fetch document classes from M-Files'
@@ -466,8 +769,30 @@ def list_mfiles_document_classes():
 def list_mfiles_search_fields():
     """List searchable field definitions for a given M-Files document class."""
     try:
-        doc_class = str(request.args.get('docClass') or 'Drawing').strip() or 'Drawing'
+        doc_class = str(request.args.get('docClass')
+                        or 'Drawing').strip() or 'Drawing'
         fields = mfiles_client.get_search_fields(doc_class=doc_class)
+        automation_managed_property_ids = _get_mfiles_automation_managed_property_ids(
+            doc_class
+        )
+
+        for field in fields:
+            try:
+                field_id = int(field.get('id'))
+            except (TypeError, ValueError):
+                field_id = None
+
+            is_automation_managed = bool(
+                field_id is not None and field_id in automation_managed_property_ids
+            )
+            queue_required = bool(
+                field.get('required')
+                and not field.get('system_auto_fill')
+                and not is_automation_managed
+            )
+            field['automation_managed'] = is_automation_managed
+            field['queue_required'] = queue_required
+
         return jsonify({
             'success': True,
             'data': fields
@@ -485,7 +810,8 @@ def list_mfiles_search_fields():
             'error': str(e)
         }), 502
     except Exception as e:
-        logger.error("Unexpected M-Files search field lookup failure: %s", e, exc_info=True)
+        logger.error(
+            "Unexpected M-Files search field lookup failure: %s", e, exc_info=True)
         return jsonify({
             'success': False,
             'error': 'Failed to fetch search fields from M-Files'
@@ -530,7 +856,8 @@ def list_mfiles_property_values():
             'error': str(e)
         }), 502
     except Exception as e:
-        logger.error("Unexpected M-Files property values failure: %s", e, exc_info=True)
+        logger.error(
+            "Unexpected M-Files property values failure: %s", e, exc_info=True)
         return jsonify({
             'success': False,
             'error': 'Failed to fetch property values from M-Files'
@@ -561,7 +888,8 @@ def search_mfiles_documents():
                 'error': 'Tender is missing mfiles_project_name'
             }), 400
 
-        doc_class = str(data.get('doc_class') or data.get('class') or 'Drawing').strip()
+        doc_class = str(data.get('doc_class') or data.get(
+            'class') or 'Drawing').strip()
         keyword = str(data.get('keyword') or '').strip()
         user_criteria = _normalize_mfiles_criteria(data.get('criteria'))
 
@@ -608,10 +936,12 @@ def search_mfiles_documents():
                     if file_name:
                         file_names.append(file_name)
                         if not file_type and '.' in file_name:
-                            file_type = file_name.rsplit('.', 1)[-1].strip().lower()
+                            file_type = file_name.rsplit(
+                                '.', 1)[-1].strip().lower()
 
                     if not file_type:
-                        extension = str(file_item.get('Extension') or '').strip().lower().lstrip('.')
+                        extension = str(file_item.get('Extension')
+                                        or '').strip().lower().lstrip('.')
                         if extension:
                             file_type = extension
 
@@ -673,7 +1003,8 @@ def import_mfiles_files():
         data = request.get_json(silent=True) or {}
         tender_id = str(data.get('tender_id') or '').strip()
         documents = data.get('documents') or []
-        category = str(data.get('category') or 'mfiles-import').strip() or 'mfiles-import'
+        category = str(data.get('category')
+                       or 'mfiles-import').strip() or 'mfiles-import'
 
         if not tender_id:
             return jsonify({
@@ -786,7 +1117,8 @@ def get_mfiles_import_job_status(job_id: str):
             'data': job
         })
     except Exception as e:
-        logger.error("Failed to get M-Files import job status: %s", e, exc_info=True)
+        logger.error("Failed to get M-Files import job status: %s",
+                     e, exc_info=True)
         return jsonify({
             'success': False,
             'error': str(e)
@@ -806,6 +1138,8 @@ def _process_uipath_submission_async(
     sharepoint_folder_path: str,
     output_folder_path: str,
     folder_list: list = None,
+    mfiles_document_class: str = '',
+    mfiles_properties: Optional[List[Dict[str, Any]]] = None,
     claim_before_submit: bool = True,
     claim_allowed_statuses: Optional[list] = None,
     attempt_source: str = 'submission',
@@ -847,6 +1181,17 @@ def _process_uipath_submission_async(
                     "[Background] Batch %s not found during submission", batch_id)
                 return
 
+        resolved_mfiles_document_class = str(
+            mfiles_document_class
+            or (batch.get('mfiles_document_class') if batch else '')
+            or ''
+        ).strip()
+        resolved_mfiles_properties = (
+            mfiles_properties
+            if mfiles_properties is not None
+            else (batch.get('mfiles_properties') if batch else [])
+        ) or []
+
         attempts = batch.get('submission_attempts', []) if batch else []
         existing_reference = batch.get('uipath_reference', '') if batch else ''
 
@@ -861,6 +1206,8 @@ def _process_uipath_submission_async(
             output_folder_path=output_folder_path,
             folder_list=folder_list,
             reference=existing_reference or None,
+            mfiles_document_class=resolved_mfiles_document_class,
+            mfiles_properties=resolved_mfiles_properties,
         )
 
         logger.info(
@@ -1010,6 +1357,10 @@ def retry_stuck_batches():
                             output_folder_path=claimed.get(
                                 'output_folder_path', ''),
                             folder_list=claimed.get('folder_list', []),
+                            mfiles_document_class=claimed.get(
+                                'mfiles_document_class', ''),
+                            mfiles_properties=claimed.get(
+                                'mfiles_properties', []),
                             claim_before_submit=False,
                             attempt_source='auto-retry',
                             claim_owner=owner,
@@ -2108,6 +2459,8 @@ def retry_batch(tender_id: str, batch_id: str):
         sharepoint_folder_path = batch.get('sharepoint_folder_path', '')
         output_folder_path = batch.get('output_folder_path', '')
         folder_list = batch.get('folder_list', [])
+        mfiles_document_class = batch.get('mfiles_document_class', '')
+        mfiles_properties = batch.get('mfiles_properties', [])
 
         # Get email from current user making the retry request (not from old batch metadata)
         # This ensures we use a valid email even for legacy batches with display names
@@ -2152,7 +2505,9 @@ def retry_batch(tender_id: str, batch_id: str):
                 user_email,
                 sharepoint_folder_path,
                 output_folder_path,
-                folder_list
+                folder_list,
+                mfiles_document_class,
+                mfiles_properties,
             ),
             kwargs={
                 'claim_before_submit': False,
@@ -2290,9 +2645,11 @@ def batch_complete_webhook():
                 'error': 'Webhook authentication not configured'
             }), 503
 
-        provided_key = request.headers.get(WEBHOOK_BATCH_COMPLETE_KEY_HEADER, '')
+        provided_key = request.headers.get(
+            WEBHOOK_BATCH_COMPLETE_KEY_HEADER, '')
         if not provided_key or not hmac.compare_digest(provided_key, WEBHOOK_BATCH_COMPLETE_KEY):
-            logger.warning("Rejected batch-complete webhook due to invalid key header")
+            logger.warning(
+                "Rejected batch-complete webhook due to invalid key header")
             return jsonify({
                 'success': False,
                 'error': 'Invalid webhook key'
@@ -2449,23 +2806,21 @@ def purge_old_batches():
 def queue_extraction():
     """Queue drawing metadata extraction via UiPath - creates batch and submits job"""
     try:
-        data = request.json
-        tender_id = data.get('tender_id')
+        data = request.get_json(silent=True) or {}
+        tender_id = str(data.get('tender_id') or '').strip()
         tender_name = data.get('tender_name')
         file_paths = data.get('file_paths', [])
 
         # Support both 'discipline' (legacy) and 'destination' (new)
-        destination = data.get('destination')
+        destination = str(data.get('destination') or '').strip()
         # Fallback for backward compatibility
-        discipline = data.get('discipline')
-
-        # Use destination if provided, otherwise fall back to discipline
-        category = destination or discipline
+        discipline = str(data.get('discipline') or '').strip()
+        mfiles_document_class = str(
+            data.get('mfiles_document_class') or '').strip()
+        raw_mfiles_properties = data.get('mfiles_properties')
 
         # {x, y, width, height} in pixels
         title_block_coords = data.get('title_block_coords')
-        batch_name = data.get(
-            'batch_name', f"{category} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
 
         # Get SharePoint paths from request
         sharepoint_folder_path = data.get('sharepoint_folder_path')
@@ -2474,11 +2829,52 @@ def queue_extraction():
         # Get folder list from request (list of folder names)
         folder_list = data.get('folder_list', [])
 
-        if not all([tender_id, file_paths, category, title_block_coords]):
+        if not tender_id or not isinstance(file_paths, list) or not file_paths or not title_block_coords:
             return jsonify({
                 'success': False,
-                'error': 'Missing required fields: tender_id, file_paths, destination (or discipline), title_block_coords'
+                'error': 'Missing required fields: tender_id, file_paths, title_block_coords'
             }), 400
+
+        tender = metadata_store.get_tender(tender_id)
+        if not tender:
+            return jsonify({
+                'success': False,
+                'error': 'Tender not found'
+            }), 404
+
+        tender_type = str(tender.get('tender_type')
+                          or 'sharepoint').strip().lower()
+        is_mfiles_tender = tender_type == 'mfiles'
+        category = destination or discipline
+        validated_mfiles_properties: List[Dict[str, Any]] = []
+
+        if is_mfiles_tender:
+            if not mfiles_document_class:
+                return jsonify({
+                    'success': False,
+                    'error': 'mfiles_document_class is required for mfiles tenders'
+                }), 400
+
+            if raw_mfiles_properties is None:
+                return jsonify({
+                    'success': False,
+                    'error': 'mfiles_properties is required for mfiles tenders'
+                }), 400
+
+            validated_mfiles_properties = _validate_mfiles_extraction_properties(
+                tender=tender,
+                mfiles_document_class=mfiles_document_class,
+                raw_properties=raw_mfiles_properties,
+            )
+            category = mfiles_document_class
+        elif not category:
+            return jsonify({
+                'success': False,
+                'error': 'Missing required field for sharepoint tender: destination (or discipline)'
+            }), 400
+
+        batch_name = data.get(
+            'batch_name', f"{category} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
 
         user_info = extract_user_info(request.headers)
         user_email = user_info.get('email') or user_info.get('name', 'Unknown')
@@ -2500,6 +2896,23 @@ def queue_extraction():
             output_folder_path=output_folder_path,
             folder_list=folder_list
         )
+
+        if is_mfiles_tender:
+            updated_batch = metadata_store.update_batch(
+                tender_id=tender_id,
+                batch_id=batch['batch_id'],
+                updates={
+                    'mfiles_document_class': mfiles_document_class,
+                    'mfiles_properties': validated_mfiles_properties,
+                },
+            )
+            if updated_batch:
+                batch = updated_batch
+            else:
+                logger.warning(
+                    "Failed to persist M-Files extraction metadata on batch %s",
+                    batch.get('batch_id')
+                )
 
         # Update file categories and batch references
         metadata_store.update_files_category(
@@ -2539,7 +2952,9 @@ def queue_extraction():
                 user_email,
                 sharepoint_folder_path,
                 output_folder_path,
-                folder_list
+                folder_list,
+                mfiles_document_class if is_mfiles_tender else '',
+                validated_mfiles_properties if is_mfiles_tender else [],
             ),
             kwargs={
                 'claim_before_submit': False,
@@ -2565,6 +2980,24 @@ def queue_extraction():
             }
         }), 202
 
+    except ValueError as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 400
+    except MFilesConfigurationError as e:
+        logger.error(
+            "M-Files configuration error during queue extraction: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 503
+    except MFilesClientError as e:
+        logger.error("M-Files request failed during queue extraction: %s", e)
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 502
     except Exception as e:
         logger.error(f"Failed to queue extraction: {str(e)}", exc_info=True)
         return jsonify({
@@ -2816,14 +3249,16 @@ def _resolve_mfiles_import_filename(download_info: Dict[str, Any], document: Dic
             chosen = safe_name
             break
 
-    content_type = str(download_info.get('content_type') or '').split(';')[0].strip().lower()
+    content_type = str(download_info.get('content_type')
+                       or '').split(';')[0].strip().lower()
     if chosen and '.' not in chosen and content_type:
         guessed_extension = mimetypes.guess_extension(content_type)
         if guessed_extension:
             chosen = f"{chosen}{guessed_extension}"
 
     if not chosen:
-        guessed_extension = mimetypes.guess_extension(content_type) if content_type else None
+        guessed_extension = mimetypes.guess_extension(
+            content_type) if content_type else None
         chosen = f"mfiles-{display_id}{guessed_extension or '.bin'}"
 
     return chosen
@@ -2837,7 +3272,8 @@ def _ensure_unique_mfiles_filename(
     used_paths: set,
 ) -> str:
     """Ensure imported M-Files filenames do not overwrite existing files."""
-    cleaned_display_id = re.sub(r'[^A-Za-z0-9._-]+', '-', str(display_id or '').strip()) or 'doc'
+    cleaned_display_id = re.sub(
+        r'[^A-Za-z0-9._-]+', '-', str(display_id or '').strip()) or 'doc'
     base_name, extension = os.path.splitext(filename)
     extension = extension or ''
 
@@ -2870,7 +3306,8 @@ def _process_mfiles_import(job_id: str, tender_id: str, documents: list, categor
     try:
         used_paths = set()
         try:
-            existing_files = metadata_store.list_files(tender_id, exclude_batched=False)
+            existing_files = metadata_store.list_files(
+                tender_id, exclude_batched=False)
             used_paths = {
                 str(file.get('path') or '').strip()
                 for file in existing_files
@@ -2891,20 +3328,25 @@ def _process_mfiles_import(job_id: str, tender_id: str, documents: list, categor
                 if job_id in mfiles_import_jobs:
                     mfiles_import_jobs[job_id]['current_file'] = label
                     mfiles_import_jobs[job_id]['progress'] = i
-                    mfiles_import_jobs[job_id]['updated_at'] = datetime.utcnow().isoformat()
+                    mfiles_import_jobs[job_id]['updated_at'] = datetime.utcnow(
+                    ).isoformat()
 
             try:
                 if not display_id:
                     raise ValueError('Document display_id is missing')
 
-                download_info = mfiles_client.download_document_contents(display_id)
+                download_info = mfiles_client.download_document_contents(
+                    display_id)
                 content = download_info.get('content')
                 if not isinstance(content, (bytes, bytearray)):
-                    raise ValueError('M-Files download did not return file content')
+                    raise ValueError(
+                        'M-Files download did not return file content')
                 if len(content) == 0:
-                    raise ValueError('M-Files download returned empty file content')
+                    raise ValueError(
+                        'M-Files download returned empty file content')
 
-                filename = _resolve_mfiles_import_filename(download_info, document, display_id)
+                filename = _resolve_mfiles_import_filename(
+                    download_info, document, display_id)
                 filename = _ensure_unique_mfiles_filename(
                     tender_id=tender_id,
                     category=category,
@@ -2916,7 +3358,8 @@ def _process_mfiles_import(job_id: str, tender_id: str, documents: list, categor
                 file_storage = FileStorage(
                     stream=file_stream,
                     filename=filename,
-                    content_type=str(download_info.get('content_type') or 'application/octet-stream')
+                    content_type=str(download_info.get(
+                        'content_type') or 'application/octet-stream')
                 )
 
                 file_metadata = blob_service.upload_file(
@@ -2936,7 +3379,8 @@ def _process_mfiles_import(job_id: str, tender_id: str, documents: list, categor
                         exc_info=True
                     )
                     try:
-                        blob_service.delete_file(tender_id, file_metadata.get('path'))
+                        blob_service.delete_file(
+                            tender_id, file_metadata.get('path'))
                     except Exception:
                         logger.error(
                             "M-Files import compensation failed for %s",
@@ -2997,12 +3441,15 @@ def _process_mfiles_import(job_id: str, tender_id: str, documents: list, categor
         cleanup_thread.start()
 
     except Exception as e:
-        logger.error("Fatal error in M-Files import job %s: %s", job_id, e, exc_info=True)
+        logger.error("Fatal error in M-Files import job %s: %s",
+                     job_id, e, exc_info=True)
         with import_jobs_lock:
             if job_id in mfiles_import_jobs:
                 mfiles_import_jobs[job_id]['status'] = 'failed'
-                mfiles_import_jobs[job_id]['errors'].append(f"Fatal error: {str(e)}")
-                mfiles_import_jobs[job_id]['updated_at'] = datetime.utcnow().isoformat()
+                mfiles_import_jobs[job_id]['errors'].append(
+                    f"Fatal error: {str(e)}")
+                mfiles_import_jobs[job_id]['updated_at'] = datetime.utcnow(
+                ).isoformat()
 
 
 def _process_sharepoint_import(job_id: str, tender_id: str, access_token: str, items: list, category: str):

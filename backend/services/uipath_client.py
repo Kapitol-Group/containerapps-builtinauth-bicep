@@ -1,6 +1,7 @@
 """
 UiPath REST API client for drawing metadata extraction with Entity Store integration
 """
+import json
 import requests
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -645,7 +646,9 @@ class UiPathClient:
                           tender_file_id: str,
                           title_block_coords: Optional[Dict] = None,
                           sharepoint_folder_path: Optional[str] = None,
-                          output_folder_path: Optional[str] = None) -> Dict:
+                          output_folder_path: Optional[str] = None,
+                          mfiles_document_class: Optional[str] = None,
+                          mfiles_properties: Optional[List[Dict]] = None) -> Dict:
         """
         Build a UiPath queue item object
 
@@ -660,6 +663,8 @@ class UiPathClient:
             title_block_coords: Optional title block coordinates {x, y, width, height} in pixels
             sharepoint_folder_path: SharePoint folder path for input documents
             output_folder_path: SharePoint folder path for output location
+            mfiles_document_class: Selected M-Files document class (optional)
+            mfiles_properties: Selected mandatory M-Files metadata payload (optional)
 
         Returns:
             Queue item dictionary for bulk add API
@@ -690,6 +695,14 @@ class UiPathClient:
                 "TenderFileId": tender_file_id
             }
         }
+
+        if mfiles_document_class:
+            queue_item["SpecificContent"]["DocumentClass"] = mfiles_document_class
+            queue_item["SpecificContent"]["MFilesMetadataJson"] = json.dumps(
+                mfiles_properties or [],
+                ensure_ascii=False,
+                separators=(',', ':')
+            )
 
         print(
             f"Built queue item: File={file_path}, Discipline={discipline}, Ref={reference}, TenderFileId={tender_file_id}, Coords={coords_str}")
@@ -783,7 +796,9 @@ class UiPathClient:
                               sharepoint_folder_path: Optional[str] = None,
                               output_folder_path: Optional[str] = None,
                               folder_list: Optional[List[str]] = None,
-                              reference: Optional[str] = None) -> Dict:
+                              reference: Optional[str] = None,
+                              mfiles_document_class: Optional[str] = None,
+                              mfiles_properties: Optional[List[Dict]] = None) -> Dict:
         """
         Submit a drawing metadata extraction job via Entity Store and UiPath queue
 
@@ -797,6 +812,8 @@ class UiPathClient:
             sharepoint_folder_path: SharePoint folder path for input documents
             output_folder_path: SharePoint folder path for output location
             folder_list: List of available destination folder names (stored as semicolon-delimited string)
+            mfiles_document_class: Selected M-Files document class
+            mfiles_properties: Selected mandatory M-Files properties
 
         Returns:
             Job information dictionary with submission details
@@ -886,7 +903,9 @@ class UiPathClient:
                     tender_file_id=tender_file_id,
                     title_block_coords=title_block_coords,
                     sharepoint_folder_path=sharepoint_folder_path,
-                    output_folder_path=output_folder_path
+                    output_folder_path=output_folder_path,
+                    mfiles_document_class=mfiles_document_class,
+                    mfiles_properties=mfiles_properties,
                 )
                 queue_items.append(queue_item)
 

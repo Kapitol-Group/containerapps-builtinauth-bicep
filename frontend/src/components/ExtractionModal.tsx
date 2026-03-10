@@ -1,8 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
-import { TenderFile, TitleBlockCoords, Tender } from '../types';
-import { uipathApi, filesApi, tendersApi, sharepointApi } from '../services/api';
+import {
+  TenderFile,
+  TitleBlockCoords,
+  Tender,
+  MFilesDocumentClass,
+  MFilesSearchField,
+  MFilesPropertyValue,
+  MFilesExtractionProperty,
+} from '../types';
+import { uipathApi, filesApi, tendersApi, sharepointApi, mfilesApi } from '../services/api';
 import { getGraphApiToken } from '../authConfig';
 import Dialog from './Dialog';
 import './CreateTenderModal.css';
@@ -44,6 +52,20 @@ interface PageSizeInfo {
   error?: string;
 }
 
+interface MFilesFieldSelection {
+  value: string;
+  value_id: string;
+  values: string[];
+  value_ids: string[];
+}
+
+const DEFAULT_MFILES_FIELD_SELECTION: MFilesFieldSelection = {
+  value: '',
+  value_id: '',
+  values: [],
+  value_ids: [],
+};
+
 function identifyPageSize(w: number, h: number): string {
   // Normalise to landscape (wider dimension first) for comparison
   const [wide, narrow] = w >= h ? [w, h] : [h, w];
@@ -72,10 +94,40 @@ function areSameSize(a: PageSizeInfo, b: PageSizeInfo): boolean {
   return matchSame || matchFlipped;
 }
 
+function getMFilesDataType(field: MFilesSearchField): number {
+  const parsed = Number(field.data_type);
+  return Number.isFinite(parsed) ? parsed : -1;
+}
+
+function isLookupField(field: MFilesSearchField): boolean {
+  const dataType = getMFilesDataType(field);
+  return dataType === 9 || dataType === 10;
+}
+
+function isMultiSelectLookupField(field: MFilesSearchField): boolean {
+  return getMFilesDataType(field) === 10;
+}
+
 const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName, files, onClose, onSubmit }) => {
   const [destination, setDestination] = useState('');
   const [destinations, setDestinations] = useState<Array<{ name: string; path: string }>>([]);
   const [isLoadingDestinations, setIsLoadingDestinations] = useState(false);
+  const [tenderType, setTenderType] = useState<'sharepoint' | 'mfiles'>('sharepoint');
+  const [mfilesDocumentClass, setMfilesDocumentClass] = useState('');
+  const [mfilesDocumentClasses, setMfilesDocumentClasses] = useState<MFilesDocumentClass[]>([]);
+  const [isLoadingMfilesDocumentClasses, setIsLoadingMfilesDocumentClasses] = useState(false);
+  const [mfilesDocumentClassesError, setMfilesDocumentClassesError] = useState('');
+  const [isDocumentClassDropdownOpen, setIsDocumentClassDropdownOpen] = useState(false);
+  const [documentClassFilter, setDocumentClassFilter] = useState('');
+  const [mfilesMandatoryFields, setMfilesMandatoryFields] = useState<MFilesSearchField[]>([]);
+  const [isLoadingMfilesMandatoryFields, setIsLoadingMfilesMandatoryFields] = useState(false);
+  const [mfilesMandatoryFieldsError, setMfilesMandatoryFieldsError] = useState('');
+  const [mfilesFieldValues, setMfilesFieldValues] = useState<Record<number, MFilesFieldSelection>>({});
+  const [mfilesPropertyValuesByFieldId, setMfilesPropertyValuesByFieldId] = useState<Record<number, MFilesPropertyValue[]>>({});
+  const [mfilesPropertyValuesLoadingByFieldId, setMfilesPropertyValuesLoadingByFieldId] = useState<Record<number, boolean>>({});
+  const [mfilesPropertyValuesErrorByFieldId, setMfilesPropertyValuesErrorByFieldId] = useState<Record<number, string>>({});
+  const [mfilesPropertyValueFilterByFieldId, setMfilesPropertyValueFilterByFieldId] = useState<Record<number, string>>({});
+  const [openMultiSelectFieldId, setOpenMultiSelectFieldId] = useState<number | null>(null);
   const [coords, setCoords] = useState<TitleBlockCoords>({ x: 0, y: 0, width: 0, height: 0 });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showRegionSelector, setShowRegionSelector] = useState(false);
@@ -97,60 +149,242 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
   const renderTaskRef = useRef<any>(null);
   const animationFrameRef = useRef<number | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null); // Store rendered PDF
+  const isMFilesTender = tenderType === 'mfiles';
 
-  // Load destinations from SharePoint on mount
   useEffect(() => {
-    const loadDestinations = async () => {
+    let cancelled = false;
+
+    const loadTenderContext = async () => {
       setIsLoadingDestinations(true);
+      setIsLoadingMfilesDocumentClasses(false);
+      setMfilesDocumentClassesError('');
+      setMfilesMandatoryFieldsError('');
+
       try {
-        // Get tender details to retrieve output location
         const tenderData = await tendersApi.get(tenderId);
-        setTender(tenderData); // Store tender data
-        
+        if (cancelled) {
+          return;
+        }
+
+        setTender(tenderData);
+        const resolvedTenderType = (tenderData.tender_type || 'sharepoint').toLowerCase() === 'mfiles'
+          ? 'mfiles'
+          : 'sharepoint';
+        setTenderType(resolvedTenderType);
+
+        if (resolvedTenderType === 'mfiles') {
+          setDestinations([]);
+          setDestination('');
+          setIsDocumentClassDropdownOpen(false);
+          setDocumentClassFilter('');
+          setIsLoadingMfilesDocumentClasses(true);
+
+          try {
+            const classes = await mfilesApi.getDocumentClasses();
+            if (cancelled) {
+              return;
+            }
+
+            const normalizedClasses = classes.filter((item) => item?.name?.trim());
+            setMfilesDocumentClasses(normalizedClasses);
+
+            const drawingClass = normalizedClasses.find(
+              (item) => item.name.trim().toLowerCase() === 'drawing'
+            );
+            const defaultClass = drawingClass?.name || normalizedClasses[0]?.name || 'Drawing';
+            setMfilesDocumentClass(defaultClass);
+          } catch (mfilesError: any) {
+            if (!cancelled) {
+              setMfilesDocumentClasses([{ id: 'Drawing', name: 'Drawing' }]);
+              setMfilesDocumentClass('Drawing');
+              setMfilesDocumentClassesError(mfilesError?.message || 'Failed to load M-Files document classes');
+            }
+          } finally {
+            if (!cancelled) {
+              setIsLoadingMfilesDocumentClasses(false);
+            }
+          }
+
+          return;
+        }
+
         if (!tenderData.output_library_id || !tenderData.output_folder_path) {
           console.warn('Tender missing output location configuration');
           setDestinations([]);
-          setIsLoadingDestinations(false);
+          setDestination('');
           return;
         }
-        
-        // Get Graph API token
+
         const accessToken = await getGraphApiToken('https://graph.microsoft.com');
-        
         if (!accessToken) {
           console.error('Failed to get Graph API token');
           setDestinations([]);
-          setIsLoadingDestinations(false);
+          setDestination('');
           return;
         }
-        
-        // Fetch folders from SharePoint
+
         const folders = await sharepointApi.listFolders(
           accessToken,
           tenderData.output_library_id,
           tenderData.output_folder_path
         );
-        
+
+        if (cancelled) {
+          return;
+        }
+
         setDestinations(folders.map(f => ({ name: f.name, path: f.path })));
-        
-        // Set first folder as default if available
         if (folders.length > 0) {
           setDestination(folders[0].name);
+        } else {
+          setDestination('');
         }
-        
       } catch (error) {
         console.error('Failed to load destinations:', error);
-        setErrorDialog({ 
-          show: true, 
-          message: 'Failed to load destination folders from SharePoint. Please check the output location configuration.' 
-        });
+        if (!cancelled) {
+          setErrorDialog({
+            show: true,
+            message: 'Failed to load queue extraction settings. Please check tender configuration.'
+          });
+        }
       } finally {
-        setIsLoadingDestinations(false);
+        if (!cancelled) {
+          setIsLoadingDestinations(false);
+        }
       }
     };
-    
-    loadDestinations();
+
+    loadTenderContext();
+
+    return () => {
+      cancelled = true;
+    };
   }, [tenderId]);
+
+  useEffect(() => {
+    if (!isMFilesTender || !mfilesDocumentClass.trim()) {
+      return;
+    }
+
+    let cancelled = false;
+
+    setMfilesMandatoryFields([]);
+    setMfilesFieldValues({});
+    setMfilesPropertyValuesByFieldId({});
+    setMfilesPropertyValuesLoadingByFieldId({});
+    setMfilesPropertyValuesErrorByFieldId({});
+    setMfilesPropertyValueFilterByFieldId({});
+
+    const timer = setTimeout(async () => {
+      setIsLoadingMfilesMandatoryFields(true);
+      setMfilesMandatoryFieldsError('');
+
+      try {
+        const fields = await mfilesApi.getSearchFields(mfilesDocumentClass.trim());
+        if (cancelled) {
+          return;
+        }
+
+        const mandatoryFields = fields.filter((field) => {
+          if (typeof field.queue_required === 'boolean') {
+            return field.queue_required;
+          }
+          return field.required && !field.system_auto_fill;
+        });
+        setMfilesMandatoryFields(mandatoryFields);
+
+        setMfilesFieldValues((previous) => {
+          const nextValues: Record<number, MFilesFieldSelection> = {};
+          mandatoryFields.forEach((field) => {
+            const existing = previous[field.id] || DEFAULT_MFILES_FIELD_SELECTION;
+            const isLockedProjectField = field.name.trim().toLowerCase() === 'project' && Boolean(tender?.mfiles_project_name);
+            nextValues[field.id] = isLockedProjectField
+              ? { ...existing, value: tender?.mfiles_project_name || '' }
+              : existing;
+          });
+          return nextValues;
+        });
+      } catch (error: any) {
+        if (!cancelled) {
+          setMfilesMandatoryFields([]);
+          setMfilesMandatoryFieldsError(error?.message || 'Failed to load mandatory M-Files properties');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingMfilesMandatoryFields(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isMFilesTender, mfilesDocumentClass, tender?.mfiles_project_name]);
+
+  useEffect(() => {
+    if (!isMFilesTender || mfilesMandatoryFields.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const lookupFields = mfilesMandatoryFields.filter((field) => isLookupField(field));
+    lookupFields.forEach((field) => {
+      const fieldId = field.id;
+      if (
+        mfilesPropertyValuesByFieldId[fieldId] ||
+        mfilesPropertyValuesLoadingByFieldId[fieldId]
+      ) {
+        return;
+      }
+
+      setMfilesPropertyValuesLoadingByFieldId((previous) => ({ ...previous, [fieldId]: true }));
+      setMfilesPropertyValuesErrorByFieldId((previous) => ({ ...previous, [fieldId]: '' }));
+
+      mfilesApi.getPropertyValues(fieldId)
+        .then((values) => {
+          if (cancelled) {
+            return;
+          }
+
+          setMfilesPropertyValuesByFieldId((previous) => ({ ...previous, [fieldId]: values }));
+
+          const isLockedProjectField = field.name.trim().toLowerCase() === 'project' && Boolean(tender?.mfiles_project_name);
+          if (isLockedProjectField) {
+            const matched = values.find((item) => item.name.trim().toLowerCase() === (tender?.mfiles_project_name || '').trim().toLowerCase());
+            setMfilesFieldValues((previous) => ({
+              ...previous,
+              [fieldId]: {
+                ...(previous[fieldId] || DEFAULT_MFILES_FIELD_SELECTION),
+                value: tender?.mfiles_project_name || '',
+                value_id: matched?.id || '',
+                values: isMultiSelectLookupField(field) && matched ? [matched.name] : (previous[fieldId]?.values || []),
+                value_ids: isMultiSelectLookupField(field) && matched ? [matched.id] : (previous[fieldId]?.value_ids || []),
+              },
+            }));
+          }
+        })
+        .catch((error: any) => {
+          if (!cancelled) {
+            setMfilesPropertyValuesByFieldId((previous) => ({ ...previous, [fieldId]: [] }));
+            setMfilesPropertyValuesErrorByFieldId((previous) => ({
+              ...previous,
+              [fieldId]: error?.message || 'Failed to load property values',
+            }));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setMfilesPropertyValuesLoadingByFieldId((previous) => ({ ...previous, [fieldId]: false }));
+          }
+        });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isMFilesTender, mfilesMandatoryFields, tender?.mfiles_project_name]);
 
   // Check page sizes when title block processing is toggled on
   useEffect(() => {
@@ -558,15 +792,120 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
     drawSelection();
   };
 
+  const updateMfilesFieldSelection = (fieldId: number, patch: Partial<MFilesFieldSelection>) => {
+    setMfilesFieldValues((previous) => ({
+      ...previous,
+      [fieldId]: {
+        ...(previous[fieldId] || DEFAULT_MFILES_FIELD_SELECTION),
+        ...patch,
+      },
+    }));
+  };
+
+  useEffect(() => {
+    if (openMultiSelectFieldId === null && !isDocumentClassDropdownOpen) {
+      return;
+    }
+
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (!target) {
+        return;
+      }
+
+      const withinMultiSelectDropdown = target.closest(
+        `[data-mfiles-multiselect-field-id="${openMultiSelectFieldId}"]`
+      );
+      const withinClassDropdown = target.closest('[data-mfiles-docclass-dropdown="true"]');
+
+      if (!withinMultiSelectDropdown) {
+        setOpenMultiSelectFieldId(null);
+      }
+      if (!withinClassDropdown) {
+        setIsDocumentClassDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleDocumentMouseDown);
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentMouseDown);
+    };
+  }, [openMultiSelectFieldId, isDocumentClassDropdownOpen]);
+
   const handleSubmit = async () => {
     try {
       setIsSubmitting(true);
-      
-      // Validate destination is selected
-      if (!destination) {
-        setErrorDialog({ show: true, message: 'Please select a destination folder.' });
-        setIsSubmitting(false);
-        return;
+
+      const selectedDocClass = mfilesDocumentClass.trim();
+      const isSharePointExtraction = !isMFilesTender;
+      let extractionCategory = destination;
+      let mfilesPayloadClass: string | undefined;
+      let mfilesPayloadProperties: MFilesExtractionProperty[] | undefined;
+
+      if (isSharePointExtraction) {
+        if (!destination) {
+          setErrorDialog({ show: true, message: 'Please select a destination folder.' });
+          setIsSubmitting(false);
+          return;
+        }
+      } else {
+        if (!selectedDocClass) {
+          setErrorDialog({ show: true, message: 'Please select a document class.' });
+          setIsSubmitting(false);
+          return;
+        }
+
+        const missingFields: string[] = [];
+        const properties: MFilesExtractionProperty[] = [];
+
+        for (const field of mfilesMandatoryFields) {
+          const selection = mfilesFieldValues[field.id] || DEFAULT_MFILES_FIELD_SELECTION;
+          const dataType = getMFilesDataType(field);
+          const propertyName = field.name.trim();
+          const property: MFilesExtractionProperty = {
+            property_id: field.id,
+            property_name: propertyName,
+            data_type: dataType >= 0 ? dataType : undefined,
+            data_type_word: field.data_type_word,
+          };
+
+          if (dataType === 10) {
+            if (selection.value_ids.length === 0 || selection.values.length === 0) {
+              missingFields.push(propertyName);
+              continue;
+            }
+            property.value_ids = selection.value_ids;
+            property.values = selection.values;
+          } else if (dataType === 9) {
+            if (!selection.value_id || !selection.value.trim()) {
+              missingFields.push(propertyName);
+              continue;
+            }
+            property.value_id = selection.value_id;
+            property.value = selection.value.trim();
+          } else {
+            if (!selection.value.trim()) {
+              missingFields.push(propertyName);
+              continue;
+            }
+            property.value = selection.value.trim();
+          }
+
+          properties.push(property);
+        }
+
+        if (missingFields.length > 0) {
+          setErrorDialog({
+            show: true,
+            message: `Please complete all mandatory M-Files properties: ${missingFields.join(', ')}`
+          });
+          setIsSubmitting(false);
+          return;
+        }
+
+        extractionCategory = selectedDocClass;
+        mfilesPayloadClass = selectedDocClass;
+        mfilesPayloadProperties = properties;
       }
       
       // Validate title block region if required
@@ -576,20 +915,21 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
         return;
       }
       
-      // Generate batch name based on destination and timestamp
-      const batchName = `${destination} Batch ${new Date().toLocaleString()}`;
+      const batchName = `${extractionCategory} Batch ${new Date().toLocaleString()}`;
       
       // Submit extraction - backend returns immediately after creating batch
       await uipathApi.queueExtraction(
         tenderId,
         tenderName || tenderId,
         files.map(f => f.path),
-        destination,
+        extractionCategory,
         coords,
         batchName,
         tender?.sharepoint_folder_path,
         tender?.output_folder_path,
-        destinations.map(d => d.name)
+        destinations.map(d => d.name),
+        mfilesPayloadClass,
+        mfilesPayloadProperties,
       );
       
       // Close modal immediately - batch is queued and processing in background
@@ -626,26 +966,360 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
           </div>
         </div>
 
-        <div className="form-group">
-          <label>Destination</label>
-          {isLoadingDestinations ? (
-            <select disabled>
-              <option>Loading folders...</option>
-            </select>
-          ) : destinations.length > 0 ? (
-            <select value={destination} onChange={(e) => setDestination(e.target.value)}>
-              {destinations.map((dest) => (
-                <option key={dest.name} value={dest.name}>
-                  {dest.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select disabled>
-              <option>No destination folders available</option>
-            </select>
-          )}
-        </div>
+        {!isMFilesTender ? (
+          <div className="form-group">
+            <label>Destination</label>
+            {isLoadingDestinations ? (
+              <select disabled>
+                <option>Loading folders...</option>
+              </select>
+            ) : destinations.length > 0 ? (
+              <select value={destination} onChange={(e) => setDestination(e.target.value)}>
+                {destinations.map((dest) => (
+                  <option key={dest.name} value={dest.name}>
+                    {dest.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select disabled>
+                <option>No destination folders available</option>
+              </select>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="form-group">
+              <label htmlFor="mfiles-document-class">Document Class</label>
+              <div
+                className="mfiles-class-dropdown"
+                data-mfiles-docclass-dropdown="true"
+              >
+                <button
+                  id="mfiles-document-class"
+                  type="button"
+                  className="mfiles-multiselect-trigger mfiles-class-trigger"
+                  onClick={() => {
+                    if (!isSubmitting && !isLoadingMfilesDocumentClasses) {
+                      setIsDocumentClassDropdownOpen((previous) => !previous);
+                    }
+                  }}
+                  disabled={isSubmitting || isLoadingMfilesDocumentClasses}
+                >
+                  <span className="mfiles-multiselect-trigger-text">
+                    {isLoadingMfilesDocumentClasses
+                      ? 'Loading classes...'
+                      : (mfilesDocumentClass || 'Select document class')}
+                  </span>
+                  <span className="mfiles-multiselect-trigger-caret">▾</span>
+                </button>
+
+                {isDocumentClassDropdownOpen && (
+                  <div className="mfiles-multiselect-menu mfiles-class-menu">
+                    <div className="mfiles-multiselect-search">
+                      <input
+                        type="text"
+                        value={documentClassFilter}
+                        onChange={(event) => setDocumentClassFilter(event.target.value)}
+                        placeholder="Type to filter classes..."
+                        autoFocus
+                      />
+                    </div>
+                    {(() => {
+                      const availableClasses = (
+                        mfilesDocumentClasses.length > 0
+                          ? mfilesDocumentClasses
+                          : [{ id: 'Drawing', name: mfilesDocumentClass || 'Drawing' }]
+                      );
+                      const classFilterValue = documentClassFilter.trim().toLowerCase();
+                      const filteredClasses = classFilterValue
+                        ? availableClasses.filter((item) => item.name.toLowerCase().includes(classFilterValue))
+                        : availableClasses;
+
+                      if (filteredClasses.length === 0) {
+                        return <div className="mfiles-multiselect-empty">No classes match your filter</div>;
+                      }
+
+                      return filteredClasses.map((item) => {
+                        const isSelected = item.name === mfilesDocumentClass;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className={`mfiles-class-option ${isSelected ? 'is-selected' : ''}`}
+                            onClick={() => {
+                              setMfilesDocumentClass(item.name);
+                              setIsDocumentClassDropdownOpen(false);
+                              setDocumentClassFilter('');
+                            }}
+                          >
+                            <span>{item.name}</span>
+                            {isSelected && <span className="mfiles-class-selected-marker">✓</span>}
+                          </button>
+                        );
+                      });
+                    })()}
+                  </div>
+                )}
+              </div>
+              {mfilesDocumentClassesError && (
+                <div className="mfiles-extraction-error">{mfilesDocumentClassesError}</div>
+              )}
+            </div>
+
+            <div className="form-group">
+              <label>Mandatory Properties</label>
+
+              {isLoadingMfilesMandatoryFields ? (
+                <div className="mfiles-extraction-helper">
+                  Loading mandatory properties for "{mfilesDocumentClass.trim() || 'Drawing'}"...
+                </div>
+              ) : mfilesMandatoryFieldsError ? (
+                <div className="mfiles-extraction-error">{mfilesMandatoryFieldsError}</div>
+              ) : mfilesMandatoryFields.length === 0 ? (
+                <div className="mfiles-extraction-helper">
+                  No mandatory user-entered properties found for this document class.
+                </div>
+              ) : (
+                <div className="mfiles-required-fields">
+                  {mfilesMandatoryFields.map((field) => {
+                    const selection = mfilesFieldValues[field.id] || DEFAULT_MFILES_FIELD_SELECTION;
+                    const lookup = isLookupField(field);
+                    const multiLookup = isMultiSelectLookupField(field);
+                    const fieldDataTypeWord = (field.data_type_word || '').toLowerCase();
+                    const propertyValues = mfilesPropertyValuesByFieldId[field.id] || [];
+                    const loadingPropertyValues = Boolean(mfilesPropertyValuesLoadingByFieldId[field.id]);
+                    const propertyValuesError = mfilesPropertyValuesErrorByFieldId[field.id];
+                    const isLockedProjectField = field.name.trim().toLowerCase() === 'project' && Boolean(tender?.mfiles_project_name);
+                    const valueFilter = (mfilesPropertyValueFilterByFieldId[field.id] || '').trim().toLowerCase();
+                    const filteredPropertyValues = valueFilter
+                      ? propertyValues.filter((option) => option.name.toLowerCase().includes(valueFilter))
+                      : propertyValues;
+
+                    return (
+                      <div key={field.id} className="mfiles-required-field">
+                        <label htmlFor={`mfiles-field-${field.id}`}>
+                          {field.name}
+                          {isLockedProjectField ? ' (Inherited from tender project)' : ''}
+                        </label>
+
+                        {lookup ? (
+                          multiLookup ? (
+                            <div
+                              className="mfiles-multiselect-dropdown"
+                              data-mfiles-multiselect-field-id={field.id}
+                            >
+                              <button
+                                id={`mfiles-field-${field.id}`}
+                                type="button"
+                                className="mfiles-multiselect-trigger"
+                                onClick={() => {
+                                  if (!isSubmitting && !loadingPropertyValues && !isLockedProjectField) {
+                                    setOpenMultiSelectFieldId((previous) => previous === field.id ? null : field.id);
+                                  }
+                                }}
+                                disabled={isSubmitting || loadingPropertyValues || isLockedProjectField}
+                              >
+                                <span className="mfiles-multiselect-trigger-text">
+                                  {loadingPropertyValues
+                                    ? 'Loading values...'
+                                    : selection.values.length > 0
+                                    ? selection.values.join(', ')
+                                    : 'Select values'}
+                                </span>
+                                <span className="mfiles-multiselect-trigger-caret">▾</span>
+                              </button>
+
+                              {openMultiSelectFieldId === field.id && (
+                                <div className="mfiles-multiselect-menu">
+                                  <div className="mfiles-multiselect-search">
+                                    <input
+                                      type="text"
+                                      value={mfilesPropertyValueFilterByFieldId[field.id] || ''}
+                                      onChange={(event) => {
+                                        const nextValue = event.target.value;
+                                        setMfilesPropertyValueFilterByFieldId((previous) => ({
+                                          ...previous,
+                                          [field.id]: nextValue,
+                                        }));
+                                      }}
+                                      placeholder="Type to filter values..."
+                                      disabled={loadingPropertyValues}
+                                    />
+                                  </div>
+                                  {loadingPropertyValues ? (
+                                    <div className="mfiles-multiselect-empty">Loading values...</div>
+                                  ) : filteredPropertyValues.length === 0 ? (
+                                    <div className="mfiles-multiselect-empty">No values available</div>
+                                  ) : (
+                                    filteredPropertyValues.map((option) => {
+                                      const isChecked = selection.value_ids.includes(option.id);
+                                      return (
+                                        <label key={`${option.id}-${option.name}`} className="mfiles-multiselect-option">
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={(event) => {
+                                              const checked = event.target.checked;
+                                              const currentIds = selection.value_ids || [];
+                                              const currentValues = selection.values || [];
+                                              if (checked) {
+                                                updateMfilesFieldSelection(field.id, {
+                                                  value_ids: [...currentIds, option.id],
+                                                  values: [...currentValues, option.name],
+                                                });
+                                              } else {
+                                                updateMfilesFieldSelection(field.id, {
+                                                  value_ids: currentIds.filter((id) => id !== option.id),
+                                                  values: currentValues.filter((name) => name !== option.name),
+                                                });
+                                              }
+                                            }}
+                                          />
+                                          <span>{option.name}</span>
+                                        </label>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <>
+                              {!isLockedProjectField && (
+                                <input
+                                  type="text"
+                                  value={mfilesPropertyValueFilterByFieldId[field.id] || ''}
+                                  onChange={(event) => {
+                                    const nextValue = event.target.value;
+                                    setMfilesPropertyValueFilterByFieldId((previous) => ({
+                                      ...previous,
+                                      [field.id]: nextValue,
+                                    }));
+                                  }}
+                                  placeholder="Type to filter values..."
+                                  disabled={isSubmitting || loadingPropertyValues}
+                                  className="mfiles-property-filter-input"
+                                />
+                              )}
+                              <select
+                                id={`mfiles-field-${field.id}`}
+                                value={selection.value_id}
+                                onChange={(event) => {
+                                  const selectedId = event.target.value;
+                                  const selectedValue = propertyValues.find((option) => option.id === selectedId);
+                                  updateMfilesFieldSelection(field.id, {
+                                    value_id: selectedId,
+                                    value: selectedValue?.name || '',
+                                    values: [],
+                                    value_ids: [],
+                                  });
+                                }}
+                                disabled={isSubmitting || loadingPropertyValues || isLockedProjectField}
+                              >
+                                <option value="">
+                                  {loadingPropertyValues
+                                    ? 'Loading values...'
+                                    : propertyValuesError
+                                      ? 'Failed to load values'
+                                      : filteredPropertyValues.length > 0
+                                        ? 'Select value'
+                                        : 'No values available'}
+                                </option>
+                                {filteredPropertyValues.map((option) => (
+                                  <option key={`${option.id}-${option.name}`} value={option.id}>
+                                    {option.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </>
+                          )
+                        ) : fieldDataTypeWord === 'boolean' ? (
+                          <select
+                            id={`mfiles-field-${field.id}`}
+                            value={selection.value}
+                            onChange={(event) => updateMfilesFieldSelection(field.id, {
+                              value: event.target.value,
+                              value_id: '',
+                              values: [],
+                              value_ids: [],
+                            })}
+                            disabled={isSubmitting || isLockedProjectField}
+                          >
+                            <option value="">Select value</option>
+                            <option value="true">True</option>
+                            <option value="false">False</option>
+                          </select>
+                        ) : fieldDataTypeWord === 'timestamp' ? (
+                          <input
+                            id={`mfiles-field-${field.id}`}
+                            type="datetime-local"
+                            value={selection.value}
+                            onChange={(event) => updateMfilesFieldSelection(field.id, {
+                              value: event.target.value,
+                              value_id: '',
+                              values: [],
+                              value_ids: [],
+                            })}
+                            readOnly={isLockedProjectField}
+                            disabled={isSubmitting}
+                          />
+                        ) : fieldDataTypeWord === 'integer' ? (
+                          <input
+                            id={`mfiles-field-${field.id}`}
+                            type="number"
+                            value={selection.value}
+                            onChange={(event) => updateMfilesFieldSelection(field.id, {
+                              value: event.target.value,
+                              value_id: '',
+                              values: [],
+                              value_ids: [],
+                            })}
+                            readOnly={isLockedProjectField}
+                            disabled={isSubmitting}
+                          />
+                        ) : fieldDataTypeWord === 'multilinetext' ? (
+                          <textarea
+                            id={`mfiles-field-${field.id}`}
+                            value={selection.value}
+                            onChange={(event) => updateMfilesFieldSelection(field.id, {
+                              value: event.target.value,
+                              value_id: '',
+                              values: [],
+                              value_ids: [],
+                            })}
+                            readOnly={isLockedProjectField}
+                            disabled={isSubmitting}
+                            className="mfiles-textarea"
+                          />
+                        ) : (
+                          <input
+                            id={`mfiles-field-${field.id}`}
+                            type="text"
+                            value={selection.value}
+                            onChange={(event) => updateMfilesFieldSelection(field.id, {
+                              value: event.target.value,
+                              value_id: '',
+                              values: [],
+                              value_ids: [],
+                            })}
+                            readOnly={isLockedProjectField}
+                            disabled={isSubmitting}
+                          />
+                        )}
+
+                        {loadingPropertyValues && (
+                          <div className="mfiles-extraction-helper">Loading values...</div>
+                        )}
+                        {propertyValuesError && <div className="mfiles-extraction-error">{propertyValuesError}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
         
         <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <input 

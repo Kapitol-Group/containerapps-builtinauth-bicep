@@ -185,10 +185,15 @@ class CosmosMetadataStore(MetadataStore):
 
     def _to_batch(self, doc: Dict, file_paths: Optional[List[str]] = None) -> Dict:
         batch_id = doc.get('batch_id')
+        mfiles_properties = doc.get('mfiles_properties', [])
+        if not isinstance(mfiles_properties, list):
+            mfiles_properties = []
         return {
             'batch_id': batch_id,
             'batch_name': doc.get('batch_name'),
             'discipline': doc.get('discipline'),
+            'mfiles_document_class': str(doc.get('mfiles_document_class') or ''),
+            'mfiles_properties': mfiles_properties,
             'file_paths': file_paths if file_paths is not None else self._batch_file_paths(doc.get('tender_id'), batch_id),
             'title_block_coords': doc.get('title_block_coords', {}),
             'status': doc.get('status', 'pending'),
@@ -688,6 +693,8 @@ class CosmosMetadataStore(MetadataStore):
             'output_folder_path': output_folder_path or '',
             'folder_list': folder_list or [],
             'title_block_coords': title_block_coords or {},
+            'mfiles_document_class': '',
+            'mfiles_properties': [],
             'updated_at': self._utc_now(),
         }
         self.metadata_container.upsert_item(doc)
@@ -721,6 +728,8 @@ class CosmosMetadataStore(MetadataStore):
             'output_folder_path': batch_record.get('output_folder_path', existing_doc.get('output_folder_path', '')),
             'folder_list': batch_record.get('folder_list', existing_doc.get('folder_list', [])),
             'title_block_coords': batch_record.get('title_block_coords', existing_doc.get('title_block_coords', {})),
+            'mfiles_document_class': batch_record.get('mfiles_document_class', existing_doc.get('mfiles_document_class', '')),
+            'mfiles_properties': batch_record.get('mfiles_properties', existing_doc.get('mfiles_properties', [])),
             'updated_at': self._utc_now(),
         }
         self.metadata_container.upsert_item(doc)
