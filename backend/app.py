@@ -22,7 +22,7 @@ from services.blob_storage import BlobStorageService, sanitize_metadata_value
 from services.mfiles_client import MFilesClient, MFilesClientError, MFilesConfigurationError
 from services.metadata_store_factory import build_metadata_store
 from services.uipath_client import UiPathClient
-from utils.auth import extract_user_info, require_auth
+from utils.auth import extract_group_claims, extract_group_ids, extract_user_info, require_auth
 
 # Configure logging
 logging.basicConfig(
@@ -106,6 +106,12 @@ BATCH_MAX_FAILED_ATTEMPTS = int(os.getenv('BATCH_MAX_FAILED_ATTEMPTS', '3'))
 WEBHOOK_BATCH_COMPLETE_KEY_HEADER = 'X-Webhook-Key'
 WEBHOOK_BATCH_COMPLETE_KEY = os.getenv(
     'WEBHOOK_BATCH_COMPLETE_KEY', '').strip()
+MFILES_QUEUE_DEFAULTS_ADMIN_GROUP_IDS = {
+    item.strip()
+    for item in os.getenv('MFILES_DEFAULTS_ADMIN_GROUP_IDS', '').split(',')
+    if item.strip()
+}
+MFILES_QUEUE_DEFAULT_RULE_TYPES = {'current_user', 'fixed_text', 'fixed_lookup'}
 
 ALLOWED_MFILES_MODIFIERS = {
     '<', 'lt', 'lte',
@@ -203,6 +209,414 @@ def _get_mfiles_automation_managed_property_ids(doc_class: str) -> Set[int]:
             MFILES_AUTOMATION_MANAGED_PROPERTIES.get(normalized_doc_class, set())
         )
     return combined
+
+
+def _coerce_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+
+def _build_seed_mfiles_queue_default_rules() -> List[Dict[str, Any]]:
+    return [
+        {
+            'id': 'seed-document-owner-current-user',
+            'document_class': '*',
+            'property_name': 'Document Owner',
+            'rule_type': 'current_user',
+            'text_value': '',
+            'lookup_value_id': '',
+            'lookup_value_name': '',
+            'enabled': True,
+        }
+    ]
+
+
+def _normalize_mfiles_queue_default_rule(
+    raw_rule: Any,
+    index: int,
+    *,
+    strict: bool,
+) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw_rule, dict):
+        if strict:
+            raise ValueError(f'mfiles_queue_default_rules[{index}] must be an object')
+        return None
+
+    rule_id = str(raw_rule.get('id') or '').strip() or str(uuid.uuid4())
+    document_class = str(raw_rule.get('document_class') or '').strip() or '*'
+    property_name = str(raw_rule.get('property_name') or '').strip()
+    rule_type = str(raw_rule.get('rule_type') or '').strip().lower()
+
+    if not property_name:
+        if strict:
+            raise ValueError(
+                f"mfiles_queue_default_rules[{index}].property_name is required"
+            )
+        return None
+
+    if rule_type not in MFILES_QUEUE_DEFAULT_RULE_TYPES:
+        if strict:
+            raise ValueError(
+                f"mfiles_queue_default_rules[{index}].rule_type must be one of: "
+                f"{', '.join(sorted(MFILES_QUEUE_DEFAULT_RULE_TYPES))}"
+            )
+        return None
+
+    return {
+        'id': rule_id,
+        'document_class': document_class,
+        'property_name': property_name,
+        'rule_type': rule_type,
+        'text_value': str(raw_rule.get('text_value') or '').strip(),
+        'lookup_value_id': str(raw_rule.get('lookup_value_id') or '').strip(),
+        'lookup_value_name': str(raw_rule.get('lookup_value_name') or '').strip(),
+        'enabled': _coerce_bool(raw_rule.get('enabled', True), default=True),
+    }
+
+
+def _normalize_mfiles_queue_defaults_config(
+    raw_config: Any,
+    *,
+    strict: bool,
+) -> Dict[str, Any]:
+    payload = raw_config if isinstance(raw_config, dict) else {}
+    raw_rules = payload.get('rules', [])
+    if raw_rules is None:
+        raw_rules = []
+    if not isinstance(raw_rules, list):
+        if strict:
+            raise ValueError('mfiles_queue_default_rules must be an array')
+        raw_rules = []
+
+    normalized_rules: List[Dict[str, Any]] = []
+    for index, raw_rule in enumerate(raw_rules):
+        normalized_rule = _normalize_mfiles_queue_default_rule(
+            raw_rule,
+            index,
+            strict=strict,
+        )
+        if normalized_rule:
+            normalized_rules.append(normalized_rule)
+
+    updated_at = str(payload.get('updated_at') or datetime.utcnow().isoformat())
+    return {
+        'rules': normalized_rules,
+        'updated_at': updated_at,
+    }
+
+
+def _get_seed_mfiles_queue_defaults_config() -> Dict[str, Any]:
+    return {
+        'rules': _build_seed_mfiles_queue_default_rules(),
+        'updated_at': datetime.utcnow().isoformat(),
+    }
+
+
+def _get_mfiles_queue_defaults_config() -> Dict[str, Any]:
+    try:
+        stored = metadata_store.get_mfiles_queue_defaults()
+    except Exception as exc:
+        logger.error("Failed to load M-Files queue defaults from metadata store: %s", exc)
+        stored = None
+
+    if stored is None:
+        seeded = _get_seed_mfiles_queue_defaults_config()
+        try:
+            return _normalize_mfiles_queue_defaults_config(
+                metadata_store.upsert_mfiles_queue_defaults(seeded),
+                strict=False,
+            )
+        except Exception as exc:
+            logger.error("Failed to persist seeded M-Files queue defaults: %s", exc)
+            return seeded
+
+    return _normalize_mfiles_queue_defaults_config(stored, strict=False)
+
+
+def _is_lookup_mfiles_field(field: Dict[str, Any]) -> bool:
+    try:
+        data_type = int(field.get('data_type'))
+    except (TypeError, ValueError):
+        return False
+    return data_type in {9, 10}
+
+
+def _annotate_mfiles_search_fields(
+    doc_class: str,
+    fields: List[Dict[str, Any]],
+    user_info: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    automation_managed_property_ids = _get_mfiles_automation_managed_property_ids(
+        doc_class
+    )
+    rules = _get_mfiles_queue_defaults_config().get('rules', [])
+    current_user_name = str((user_info or {}).get('name') or '').strip()
+    normalized_doc_class = str(doc_class or '').strip().lower()
+
+    def resolve_default(field: Dict[str, Any], queue_required: bool) -> Optional[Dict[str, Any]]:
+        if not queue_required:
+            return None
+
+        field_name = str(field.get('name') or '').strip()
+        if not field_name:
+            return None
+
+        normalized_field_name = field_name.lower()
+        matched_rule: Optional[Dict[str, Any]] = None
+
+        for rule in rules:
+            if not rule.get('enabled'):
+                continue
+            if str(rule.get('property_name') or '').strip().lower() != normalized_field_name:
+                continue
+            rule_doc_class = str(rule.get('document_class') or '').strip().lower() or '*'
+            if rule_doc_class == normalized_doc_class:
+                matched_rule = rule
+                break
+            if rule_doc_class == '*' and matched_rule is None:
+                matched_rule = rule
+
+        if not matched_rule:
+            return None
+
+        if matched_rule.get('rule_type') == 'current_user':
+            return {
+                'id': matched_rule.get('id'),
+                'document_class': matched_rule.get('document_class'),
+                'property_name': matched_rule.get('property_name'),
+                'rule_type': 'current_user',
+                'text_value': current_user_name,
+                'lookup_value_id': '',
+                'lookup_value_name': '',
+            }
+
+        if matched_rule.get('rule_type') == 'fixed_text':
+            return {
+                'id': matched_rule.get('id'),
+                'document_class': matched_rule.get('document_class'),
+                'property_name': matched_rule.get('property_name'),
+                'rule_type': 'fixed_text',
+                'text_value': str(matched_rule.get('text_value') or '').strip(),
+                'lookup_value_id': '',
+                'lookup_value_name': '',
+            }
+
+        return {
+            'id': matched_rule.get('id'),
+            'document_class': matched_rule.get('document_class'),
+            'property_name': matched_rule.get('property_name'),
+            'rule_type': 'fixed_lookup',
+            'text_value': str(matched_rule.get('lookup_value_name') or '').strip(),
+            'lookup_value_id': str(matched_rule.get('lookup_value_id') or '').strip(),
+            'lookup_value_name': str(matched_rule.get('lookup_value_name') or '').strip(),
+        }
+
+    for field in fields:
+        try:
+            field_id = int(field.get('id'))
+        except (TypeError, ValueError):
+            field_id = None
+
+        is_automation_managed = bool(
+            field_id is not None and field_id in automation_managed_property_ids
+        )
+        queue_required = bool(
+            field.get('required')
+            and not field.get('system_auto_fill')
+            and not is_automation_managed
+        )
+        field['automation_managed'] = is_automation_managed
+        field['queue_required'] = queue_required
+        resolved_default = resolve_default(field, queue_required)
+        if resolved_default:
+            field['queue_default'] = resolved_default
+
+    return fields
+
+
+def _get_queue_required_field_by_name(
+    doc_class: str,
+    *,
+    cache: Dict[str, Dict[str, Dict[str, Any]]],
+) -> Dict[str, Dict[str, Any]]:
+    normalized_doc_class = str(doc_class or '').strip().lower()
+    if normalized_doc_class in cache:
+        return cache[normalized_doc_class]
+
+    fields = _annotate_mfiles_search_fields(
+        doc_class,
+        mfiles_client.get_search_fields(doc_class=doc_class),
+    )
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for field in fields:
+        if not field.get('queue_required'):
+            continue
+        field_name = str(field.get('name') or '').strip().lower()
+        if field_name and field_name not in indexed:
+            indexed[field_name] = field
+
+    cache[normalized_doc_class] = indexed
+    return indexed
+
+
+def _is_property_lookup_across_any_doc_class(property_name: str) -> bool:
+    normalized_property_name = str(property_name or '').strip().lower()
+    if not normalized_property_name:
+        return False
+
+    for doc_class in mfiles_client.get_document_classes():
+        doc_class_name = str(doc_class.get('name') or '').strip()
+        if not doc_class_name:
+            continue
+        fields = _annotate_mfiles_search_fields(
+            doc_class_name,
+            mfiles_client.get_search_fields(doc_class=doc_class_name),
+        )
+        for field in fields:
+            if not field.get('queue_required'):
+                continue
+            if str(field.get('name') or '').strip().lower() != normalized_property_name:
+                continue
+            if _is_lookup_mfiles_field(field):
+                return True
+    return False
+
+
+def _validate_mfiles_queue_default_rules(raw_rules: Any) -> List[Dict[str, Any]]:
+    normalized = _normalize_mfiles_queue_defaults_config(
+        {'rules': raw_rules},
+        strict=True,
+    )
+    rules = normalized['rules']
+    seen_keys: Set[str] = set()
+    field_cache: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    for rule in rules:
+        normalized_doc_class = str(rule.get('document_class') or '').strip().lower() or '*'
+        normalized_property_name = str(rule.get('property_name') or '').strip().lower()
+        duplicate_key = f"{normalized_doc_class}::{normalized_property_name}"
+        if duplicate_key in seen_keys:
+            raise ValueError(
+                f"Duplicate M-Files queue default rule for '{rule['property_name']}' in '{rule['document_class']}'"
+            )
+        seen_keys.add(duplicate_key)
+
+        rule_type = rule['rule_type']
+        if rule_type == 'fixed_lookup' and normalized_doc_class == '*':
+            raise ValueError(
+                "fixed_lookup rules require a specific document class"
+            )
+        if rule_type == 'fixed_text' and not str(rule.get('text_value') or '').strip():
+            raise ValueError(
+                f"fixed_text rule for '{rule['property_name']}' requires text_value"
+            )
+        if rule_type == 'fixed_lookup':
+            if not str(rule.get('lookup_value_id') or '').strip():
+                raise ValueError(
+                    f"fixed_lookup rule for '{rule['property_name']}' requires lookup_value_id"
+                )
+            if not str(rule.get('lookup_value_name') or '').strip():
+                raise ValueError(
+                    f"fixed_lookup rule for '{rule['property_name']}' requires lookup_value_name"
+                )
+
+        if normalized_doc_class == '*':
+            if rule_type == 'fixed_text' and _is_property_lookup_across_any_doc_class(
+                rule['property_name']
+            ):
+                raise ValueError(
+                    f"fixed_text rule for '{rule['property_name']}' targets a lookup field in at least one document class"
+                )
+            continue
+
+        fields_by_name = _get_queue_required_field_by_name(
+            rule['document_class'],
+            cache=field_cache,
+        )
+        field = fields_by_name.get(normalized_property_name)
+        if not field:
+            raise ValueError(
+                f"Property '{rule['property_name']}' is not a queue-visible M-Files field for document class '{rule['document_class']}'"
+            )
+
+        if rule_type == 'fixed_text' and _is_lookup_mfiles_field(field):
+            raise ValueError(
+                f"fixed_text rule for '{rule['property_name']}' cannot target a lookup field"
+            )
+        if rule_type == 'fixed_lookup' and not _is_lookup_mfiles_field(field):
+            raise ValueError(
+                f"fixed_lookup rule for '{rule['property_name']}' must target a lookup field"
+            )
+
+        if rule_type == 'fixed_lookup':
+            try:
+                property_id = int(field.get('id'))
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"Property '{rule['property_name']}' in document class '{rule['document_class']}' has an invalid id"
+                )
+
+            property_values = mfiles_client.get_property_values(property_id)
+            lookup_id = str(rule.get('lookup_value_id') or '').strip()
+            lookup_name = str(rule.get('lookup_value_name') or '').strip()
+            matched = next(
+                (
+                    item for item in property_values
+                    if str(item.get('id') or '').strip() == lookup_id
+                    or str(item.get('name') or '').strip().lower() == lookup_name.lower()
+                ),
+                None,
+            )
+            if not matched:
+                raise ValueError(
+                    f"Lookup value '{lookup_name or lookup_id}' is not valid for property '{rule['property_name']}' in document class '{rule['document_class']}'"
+                )
+            rule['lookup_value_id'] = str(matched.get('id') or '').strip()
+            rule['lookup_value_name'] = str(matched.get('name') or '').strip()
+
+    return rules
+
+
+def _request_is_mfiles_queue_defaults_admin() -> bool:
+    configured_group_ids = sorted(MFILES_QUEUE_DEFAULTS_ADMIN_GROUP_IDS)
+    resolved_group_claims = extract_group_claims(request.headers)
+    resolved_group_ids = sorted(extract_group_ids(request.headers))
+    matching_group_ids = sorted(
+        set(resolved_group_ids) & MFILES_QUEUE_DEFAULTS_ADMIN_GROUP_IDS
+    )
+    user_info = extract_user_info(request.headers)
+
+    logger.info(
+        "M-Files queue defaults admin access check user=%s email=%s configured_group_ids=%s resolved_group_ids=%s matching_group_ids=%s resolved_group_claims=%s",
+        user_info.get('name', 'Unknown'),
+        user_info.get('email'),
+        configured_group_ids,
+        resolved_group_ids,
+        matching_group_ids,
+        resolved_group_claims,
+    )
+
+    if not MFILES_QUEUE_DEFAULTS_ADMIN_GROUP_IDS:
+        logger.warning(
+            "M-Files queue defaults admin access denied because MFILES_DEFAULTS_ADMIN_GROUP_IDS is not configured"
+        )
+        return False
+
+    is_admin = bool(matching_group_ids)
+    if not is_admin:
+        logger.warning(
+            "M-Files queue defaults admin access denied user=%s email=%s resolved_group_ids=%s configured_group_ids=%s",
+            user_info.get('name', 'Unknown'),
+            user_info.get('email'),
+            resolved_group_ids,
+            configured_group_ids,
+        )
+    return is_admin
 
 
 def _compact_batch_error(error: object, prefix: Optional[str] = None) -> str:
@@ -771,27 +1185,12 @@ def list_mfiles_search_fields():
     try:
         doc_class = str(request.args.get('docClass')
                         or 'Drawing').strip() or 'Drawing'
-        fields = mfiles_client.get_search_fields(doc_class=doc_class)
-        automation_managed_property_ids = _get_mfiles_automation_managed_property_ids(
-            doc_class
+        user_info = extract_user_info(request.headers)
+        fields = _annotate_mfiles_search_fields(
+            doc_class,
+            mfiles_client.get_search_fields(doc_class=doc_class),
+            user_info=user_info,
         )
-
-        for field in fields:
-            try:
-                field_id = int(field.get('id'))
-            except (TypeError, ValueError):
-                field_id = None
-
-            is_automation_managed = bool(
-                field_id is not None and field_id in automation_managed_property_ids
-            )
-            queue_required = bool(
-                field.get('required')
-                and not field.get('system_auto_fill')
-                and not is_automation_managed
-            )
-            field['automation_managed'] = is_automation_managed
-            field['queue_required'] = queue_required
 
         return jsonify({
             'success': True,
@@ -861,6 +1260,83 @@ def list_mfiles_property_values():
         return jsonify({
             'success': False,
             'error': 'Failed to fetch property values from M-Files'
+        }), 500
+
+
+@app.get('/api/admin/mfiles-queue-defaults')
+@require_auth
+def get_mfiles_queue_defaults():
+    """Return persisted M-Files queue extraction default rules for admin management."""
+    if not _request_is_mfiles_queue_defaults_admin():
+        return jsonify({
+            'success': False,
+            'error': 'Admin access is required'
+        }), 403
+
+    try:
+        return jsonify({
+            'success': True,
+            'data': _get_mfiles_queue_defaults_config()
+        })
+    except Exception as exc:
+        logger.error("Failed to load M-Files queue defaults: %s", exc, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to load M-Files queue defaults'
+        }), 500
+
+
+@app.put('/api/admin/mfiles-queue-defaults')
+@require_auth
+def update_mfiles_queue_defaults():
+    """Persist M-Files queue extraction default rules after validation."""
+    if not _request_is_mfiles_queue_defaults_admin():
+        return jsonify({
+            'success': False,
+            'error': 'Admin access is required'
+        }), 403
+
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_rules = data.get('rules')
+        if raw_rules is None:
+            return jsonify({
+                'success': False,
+                'error': 'rules is required'
+            }), 400
+
+        validated_rules = _validate_mfiles_queue_default_rules(raw_rules)
+        config = {
+            'rules': validated_rules,
+            'updated_at': datetime.utcnow().isoformat(),
+        }
+        saved = metadata_store.upsert_mfiles_queue_defaults(config)
+        return jsonify({
+            'success': True,
+            'data': _normalize_mfiles_queue_defaults_config(saved, strict=False)
+        })
+    except ValueError as exc:
+        return jsonify({
+            'success': False,
+            'error': str(exc)
+        }), 400
+    except MFilesConfigurationError as exc:
+        logger.error("M-Files configuration error while saving queue defaults: %s", exc)
+        return jsonify({
+            'success': False,
+            'error': str(exc)
+        }), 503
+    except MFilesClientError as exc:
+        logger.error("M-Files request failed while saving queue defaults: %s", exc)
+        return jsonify({
+            'success': False,
+            'error': str(exc)
+        }), 502
+    except Exception as exc:
+        logger.error("Failed to update M-Files queue defaults: %s", exc, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Failed to update M-Files queue defaults'
         }), 500
 
 
@@ -3619,12 +4095,14 @@ def health_check():
 @require_auth
 def get_config():
     """Get frontend configuration from environment variables"""
+    is_mfiles_defaults_admin = _request_is_mfiles_queue_defaults_admin()
     return jsonify({
         'success': True,
         'data': {
             'entraClientId': os.getenv('ENTRA_CLIENT_ID', ''),
             'entraTenantId': os.getenv('ENTRA_TENANT_ID', ''),
-            'sharepointBaseUrl': os.getenv('SHAREPOINT_BASE_URL', '')
+            'sharepointBaseUrl': os.getenv('SHAREPOINT_BASE_URL', ''),
+            'isMfilesDefaultsAdmin': is_mfiles_defaults_admin,
         }
     })
 

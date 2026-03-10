@@ -85,11 +85,13 @@ This document describes all environment variables used by the Tender Automation 
 | `MFILES_BASE_URL` | M-Files integration API base URL | Yes* | - | `https://connectdev.kapitolgroup.com.au/i/data/api/mfiles` |
 | `MFILES_CLIENT_ID` | M-Files API client ID header value | Yes* | - | `kapitol-tender-app` |
 | `MFILES_CLIENT_SECRET` | M-Files API client secret header value | Yes* | - | `********************************` |
+| `MFILES_DEFAULTS_ADMIN_GROUP_IDS` | Comma-separated Entra group object IDs allowed to manage M-Files queue defaults | No | - | `00000000-0000-0000-0000-000000000000,11111111-1111-1111-1111-111111111111` |
 
 **Notes:**
 - \* Required for M-Files project lookup endpoint (`GET /api/mfiles/projects`)
 - `MFILES_CLIENT_SECRET` should be stored as a **secret** in Azure Container Apps
 - `MFILES_CLIENT_ID` and `MFILES_BASE_URL` are non-secret environment variables
+- If `MFILES_DEFAULTS_ADMIN_GROUP_IDS` is unset, the M-Files defaults admin UI stays hidden and admin APIs return `403`
 
 ### Webhook Security Configuration
 
@@ -179,6 +181,7 @@ Environment variables are automatically configured via Bicep templates:
 - ✅ `METADATA_READ_FALLBACK` - Defaults to `true`
 - ✅ `UIPATH_MOCK_MODE` - Set to `true` by default
 - ⚠️ `MFILES_BASE_URL`, `MFILES_CLIENT_ID`, `MFILES_CLIENT_SECRET` - Must be configured via `azd env set`
+- ⚠️ `MFILES_DEFAULTS_ADMIN_GROUP_IDS` - Optional, required only to enable admin management of M-Files queue defaults
 - ⚠️ `UIPATH_TENANT_NAME`, `UIPATH_APP_ID`, `UIPATH_API_KEY`, `UIPATH_FOLDER_ID`, `UIPATH_QUEUE_NAME` - Must be configured via `azd env set`
 - ⚠️ `DATA_FABRIC_API_URL`, `DATA_FABRIC_API_KEY` - Must be configured via `azd env set`
 - ⚠️ `WEBHOOK_BATCH_COMPLETE_KEY` - Must be configured via `azd env set` if webhook callbacks are enabled
@@ -208,6 +211,7 @@ azd deploy
 azd env set MFILES_BASE_URL "https://connectdev.kapitolgroup.com.au/i/data/api/mfiles"
 azd env set MFILES_CLIENT_ID "your-mfiles-client-id"
 azd env set MFILES_CLIENT_SECRET "your-mfiles-client-secret"
+azd env set MFILES_DEFAULTS_ADMIN_GROUP_IDS "group-object-id-1,group-object-id-2"
 azd deploy
 ```
 

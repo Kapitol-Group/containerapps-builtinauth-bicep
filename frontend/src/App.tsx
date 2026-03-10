@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { MsalProvider } from '@azure/msal-react';
 import LandingPage from './pages/LandingPage';
+import MFilesQueueDefaultsAdminPage from './pages/MFilesQueueDefaultsAdminPage';
 import TenderManagementPage from './pages/TenderManagementPage';
 import { msalInstance, initializeMsal, useLogin } from './authConfig';
 import './App.css';
@@ -30,6 +31,7 @@ function App() {
       <div className="App">
         <Routes>
           <Route path="/" element={<LandingPage />} />
+          <Route path="/admin/mfiles-defaults" element={<MFilesQueueDefaultsAdminPage />} />
           <Route path="/tender/:tenderId" element={<TenderManagementPage />} />
         </Routes>
       </div>

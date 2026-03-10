@@ -21,6 +21,13 @@ export interface Tender {
     output_folder_path?: string;
 }
 
+export interface FrontendConfig {
+    entraClientId: string;
+    entraTenantId: string;
+    sharepointBaseUrl: string;
+    isMfilesDefaultsAdmin: boolean;
+}
+
 export interface TenderFile {
     name: string;
     path: string;
@@ -57,6 +64,28 @@ export interface MFilesSearchField {
     system_auto_fill?: boolean;
     automation_managed?: boolean;
     queue_required?: boolean;
+    queue_default?: MFilesQueueDefault;
+}
+
+export type MFilesQueueDefaultRuleType = 'current_user' | 'fixed_text' | 'fixed_lookup';
+
+export interface MFilesQueueDefault {
+    id: string;
+    document_class: string;
+    property_name: string;
+    rule_type: MFilesQueueDefaultRuleType;
+    text_value?: string;
+    lookup_value_id?: string;
+    lookup_value_name?: string;
+}
+
+export interface MFilesQueueDefaultRule extends MFilesQueueDefault {
+    enabled: boolean;
+}
+
+export interface MFilesQueueDefaultsResponse {
+    rules: MFilesQueueDefaultRule[];
+    updated_at: string;
 }
 
 export interface MFilesDocumentClass {

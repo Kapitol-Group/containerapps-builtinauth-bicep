@@ -130,6 +130,12 @@ class BlobMetadataStore(MetadataStore):
     def delete_batch(self, tender_id: str, batch_id: str) -> bool:
         return self.blob_service.delete_batch(tender_id, batch_id)
 
+    def get_mfiles_queue_defaults(self) -> Optional[Dict]:
+        return self.blob_service.get_mfiles_queue_defaults()
+
+    def upsert_mfiles_queue_defaults(self, config: Dict) -> Dict:
+        return self.blob_service.upsert_mfiles_queue_defaults(config)
+
     def check_health(self) -> Dict:
         try:
             if not self.blob_service.container_client:

@@ -25,6 +25,9 @@ FILE_COUNT_RETRY_BASE_SECONDS = 0.05
 class CosmosMetadataStore(MetadataStore):
     """Metadata store implementation backed by Azure Cosmos DB."""
 
+    APP_CONFIG_TENDER_ID = '__app__'
+    MFILES_QUEUE_DEFAULTS_CONFIG_NAME = 'mfiles_queue_defaults'
+
     def __init__(
         self,
         account_endpoint: str,
@@ -74,6 +77,10 @@ class CosmosMetadataStore(MetadataStore):
     @staticmethod
     def _reference_doc_id(reference: str) -> str:
         return f"ref::{reference}"
+
+    @classmethod
+    def _app_config_doc_id(cls, config_name: str) -> str:
+        return f"app_config::{config_name}"
 
     def _read_item(self, container, doc_id: str, partition_key: str) -> Optional[Dict]:
         try:
@@ -944,6 +951,44 @@ class CosmosMetadataStore(MetadataStore):
         if batch_doc.get('uipath_reference'):
             self._delete_reference_index(batch_doc.get('uipath_reference'))
         return True
+
+    def get_mfiles_queue_defaults(self) -> Optional[Dict[str, Any]]:
+        doc = self._read_item(
+            self.metadata_container,
+            self._app_config_doc_id(self.MFILES_QUEUE_DEFAULTS_CONFIG_NAME),
+            self.APP_CONFIG_TENDER_ID,
+        )
+        if not doc:
+            return None
+
+        rules = doc.get('rules', [])
+        if not isinstance(rules, list):
+            rules = []
+
+        return {
+            'rules': rules,
+            'updated_at': doc.get('updated_at'),
+        }
+
+    def upsert_mfiles_queue_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        payload = config if isinstance(config, dict) else {}
+        rules = payload.get('rules', [])
+        if not isinstance(rules, list):
+            rules = []
+
+        doc = {
+            'id': self._app_config_doc_id(self.MFILES_QUEUE_DEFAULTS_CONFIG_NAME),
+            'doc_type': 'app_config',
+            'tender_id': self.APP_CONFIG_TENDER_ID,
+            'config_name': self.MFILES_QUEUE_DEFAULTS_CONFIG_NAME,
+            'rules': rules,
+            'updated_at': payload.get('updated_at', self._utc_now()),
+        }
+        self.metadata_container.upsert_item(doc)
+        return {
+            'rules': rules,
+            'updated_at': doc['updated_at'],
+        }
 
     def check_health(self) -> Dict:
         try:

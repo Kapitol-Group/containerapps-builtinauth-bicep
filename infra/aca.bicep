@@ -28,6 +28,7 @@ param mfilesBaseUrl string = ''
 param mfilesClientId string = ''
 @secure()
 param mfilesClientSecret string = ''
+param mfilesDefaultsAdminGroupIds string = ''
 
 // Data Fabric configuration parameters
 param dataFabricApiUrl string = ''
@@ -109,6 +110,10 @@ var baseEnvVars = [
   {
     name: 'MFILES_CLIENT_ID'
     value: mfilesClientId
+  }
+  {
+    name: 'MFILES_DEFAULTS_ADMIN_GROUP_IDS'
+    value: mfilesDefaultsAdminGroupIds
   }
   {
     name: 'DATA_FABRIC_API_URL'

@@ -2,7 +2,7 @@
 Metadata store abstraction for tender, file, and batch records.
 """
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class MetadataStore(ABC):
@@ -104,6 +104,14 @@ class MetadataStore(ABC):
 
     @abstractmethod
     def delete_batch(self, tender_id: str, batch_id: str) -> bool:
+        pass
+
+    @abstractmethod
+    def get_mfiles_queue_defaults(self) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    def upsert_mfiles_queue_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
         pass
 
     @abstractmethod

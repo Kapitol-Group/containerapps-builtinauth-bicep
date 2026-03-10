@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { tendersApi } from '../services/api';
+import { configApi, tendersApi } from '../services/api';
 import { Tender } from '../types';
 import CreateTenderModal from '../components/CreateTenderModal';
 import Dialog from '../components/Dialog';
@@ -42,9 +42,11 @@ const LandingPage: React.FC = () => {
   const [deletingTenderId, setDeletingTenderId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ show: boolean; tenderId: string | null }>({ show: false, tenderId: null });
   const [errorDialog, setErrorDialog] = useState<{ show: boolean; message: string }>({ show: false, message: '' });
+  const [isMfilesDefaultsAdmin, setIsMfilesDefaultsAdmin] = useState(false);
 
   useEffect(() => {
     loadTenders();
+    loadConfig();
   }, []);
 
   useEffect(() => {
@@ -69,6 +71,16 @@ const LandingPage: React.FC = () => {
       console.error('Failed to load tenders:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadConfig = async () => {
+    try {
+      const data = await configApi.get();
+      setIsMfilesDefaultsAdmin(Boolean(data.isMfilesDefaultsAdmin));
+    } catch (error) {
+      console.error('Failed to load config:', error);
+      setIsMfilesDefaultsAdmin(false);
     }
   };
 
@@ -120,6 +132,11 @@ const LandingPage: React.FC = () => {
           <h1>Construction Tender Document Automation</h1>
         </div>
         <div className="header-actions">
+          {isMfilesDefaultsAdmin && (
+            <button className="btn-secondary" onClick={() => navigate('/admin/mfiles-defaults')}>
+              M-Files Defaults
+            </button>
+          )}
           <button className="btn-primary" onClick={() => setShowCreateModal(true)}>
             + Create New Tender
           </button>

@@ -1,0 +1,257 @@
+.mfiles-defaults-page {
+    min-height: 100vh;
+    background: var(--background-primary);
+}
+
+.mfiles-defaults-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1.5rem;
+    align-items: flex-start;
+    padding: 2rem;
+    background: var(--background-secondary);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.mfiles-defaults-header-main {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+}
+
+.mfiles-defaults-page .back-btn,
+.mfiles-defaults-page .btn-primary,
+.mfiles-defaults-page .btn-secondary {
+    border: none;
+    border-radius: 8px;
+    padding: 0.75rem 1.1rem;
+    font-size: 0.98rem;
+    cursor: pointer;
+    transition: filter 0.2s ease, transform 0.2s ease;
+}
+
+.mfiles-defaults-page .back-btn:hover,
+.mfiles-defaults-page .btn-primary:hover,
+.mfiles-defaults-page .btn-secondary:hover {
+    filter: brightness(0.92);
+}
+
+.mfiles-defaults-page .back-btn {
+    background: rgba(0, 0, 0, 0.05);
+    color: var(--text-primary);
+}
+
+.mfiles-defaults-page .btn-primary {
+    background: var(--primary-color);
+    color: #fff;
+}
+
+.mfiles-defaults-page .btn-secondary {
+    background: var(--accent-color);
+    color: #fff;
+}
+
+.mfiles-defaults-header h1 {
+    margin: 0.15rem 0 0.35rem;
+    color: var(--primary-color);
+    font-size: 1.9rem;
+}
+
+.mfiles-defaults-eyebrow {
+    margin: 0;
+    color: var(--secondary-color);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+
+.mfiles-defaults-subtitle {
+    margin: 0;
+    color: var(--text-secondary);
+    max-width: 45rem;
+}
+
+.mfiles-defaults-actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.mfiles-defaults-content {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.mfiles-defaults-intro {
+    padding: 1rem 1.25rem;
+    background: rgba(0, 212, 192, 0.08);
+    border: 1px solid rgba(0, 212, 192, 0.18);
+    border-radius: 10px;
+    margin-bottom: 1.25rem;
+}
+
+.mfiles-defaults-intro p {
+    margin: 0;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+.mfiles-defaults-banner {
+    padding: 0.9rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-weight: 500;
+}
+
+.mfiles-defaults-banner.error {
+    background: #fff1f1;
+    border: 1px solid #f3b5b5;
+    color: #b42318;
+}
+
+.mfiles-defaults-banner.success {
+    background: rgba(40, 167, 69, 0.1);
+    border: 1px solid rgba(40, 167, 69, 0.35);
+    color: #1f7a33;
+}
+
+.mfiles-defaults-empty {
+    padding: 3rem 1.5rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 12px;
+    background: var(--background-secondary);
+    text-align: center;
+    color: var(--text-secondary);
+}
+
+.mfiles-defaults-empty p {
+    margin: 0 0 1rem;
+}
+
+.mfiles-defaults-rule-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.mfiles-defaults-rule-card {
+    background: var(--background-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.25rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.mfiles-defaults-rule-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.mfiles-defaults-rule-header h2 {
+    margin: 0;
+    color: var(--primary-color);
+    font-size: 1.1rem;
+}
+
+.mfiles-defaults-remove {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 1.6rem;
+    line-height: 1;
+    cursor: pointer;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+}
+
+.mfiles-defaults-remove:hover {
+    background: rgba(180, 35, 24, 0.08);
+    color: #b42318;
+}
+
+.mfiles-defaults-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+.mfiles-defaults-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.mfiles-defaults-field label {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.mfiles-defaults-field input[type="text"],
+.mfiles-defaults-field select {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--background-primary);
+    color: var(--text-primary);
+    padding: 0.65rem 0.8rem;
+    font-size: 0.98rem;
+}
+
+.mfiles-defaults-toggle {
+    justify-content: center;
+}
+
+.mfiles-defaults-toggle input {
+    width: 18px;
+    height: 18px;
+    margin-top: 0.3rem;
+}
+
+.mfiles-defaults-field-wide {
+    grid-column: span 3;
+}
+
+.mfiles-defaults-static {
+    min-height: 42px;
+    border-radius: 8px;
+    border: 1px dashed var(--border-color);
+    background: rgba(0, 0, 0, 0.02);
+    color: var(--text-secondary);
+    padding: 0.8rem 0.9rem;
+    line-height: 1.5;
+}
+
+.mfiles-defaults-helper {
+    margin: 0;
+    font-size: 0.84rem;
+}
+
+.error-text {
+    color: #b42318;
+}
+
+@media (max-width: 900px) {
+    .mfiles-defaults-header {
+        flex-direction: column;
+    }
+
+    .mfiles-defaults-actions {
+        justify-content: flex-start;
+    }
+
+    .mfiles-defaults-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .mfiles-defaults-field-wide {
+        grid-column: span 1;
+    }
+}

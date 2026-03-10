@@ -7,7 +7,7 @@ import os
 import uuid
 import json
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from io import BytesIO
 
 from azure.storage.blob import BlobServiceClient, BlobBlock, ContainerClient, ContentSettings
@@ -28,6 +28,7 @@ MAX_BATCH_FOLDER_LIST_ITEMS = int(
     os.getenv('BATCH_METADATA_FOLDER_LIST_MAX_ITEMS', '100'))
 MAX_BATCH_FOLDER_NAME_CHARS = int(
     os.getenv('BATCH_METADATA_FOLDER_NAME_MAX_CHARS', '120'))
+MFILES_QUEUE_DEFAULTS_BLOB_NAME = '.app_mfiles_queue_defaults.json'
 
 
 def sanitize_metadata_value(value: str) -> str:
@@ -262,6 +263,51 @@ class BlobStorageService:
             self.container_client.get_container_properties()
         except ResourceNotFoundError:
             self.container_client.create_container()
+
+    def get_mfiles_queue_defaults(self) -> Optional[Dict[str, Any]]:
+        """Read persisted M-Files queue default rules from the reserved app-config blob."""
+        if not self.container_client:
+            return None
+
+        blob_client = self.container_client.get_blob_client(
+            MFILES_QUEUE_DEFAULTS_BLOB_NAME
+        )
+        try:
+            payload = json.loads(blob_client.download_blob().readall())
+        except ResourceNotFoundError:
+            return None
+        except Exception as exc:
+            logger.error(
+                "Failed to read M-Files queue defaults blob %s: %s",
+                MFILES_QUEUE_DEFAULTS_BLOB_NAME,
+                exc,
+            )
+            return None
+
+        if not isinstance(payload, dict):
+            logger.warning(
+                "Ignoring invalid M-Files queue defaults blob payload at %s",
+                MFILES_QUEUE_DEFAULTS_BLOB_NAME,
+            )
+            return None
+
+        return payload
+
+    def upsert_mfiles_queue_defaults(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist M-Files queue default rules to the reserved app-config blob."""
+        if not self.container_client:
+            raise Exception("Blob storage not configured")
+
+        payload = config if isinstance(config, dict) else {}
+        blob_client = self.container_client.get_blob_client(
+            MFILES_QUEUE_DEFAULTS_BLOB_NAME
+        )
+        blob_client.upload_blob(
+            _json_dumps_compact(payload).encode('utf-8'),
+            overwrite=True,
+            content_settings=ContentSettings(content_type='application/json'),
+        )
+        return payload
 
     def list_tenders(self) -> List[Dict]:
         """

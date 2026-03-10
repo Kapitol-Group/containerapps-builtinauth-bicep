@@ -38,6 +38,9 @@
     "mfilesClientSecret": {
       "value": "${MFILES_CLIENT_SECRET}"
     },
+    "mfilesDefaultsAdminGroupIds": {
+      "value": "${MFILES_DEFAULTS_ADMIN_GROUP_IDS}"
+    },
     "dataFabricApiUrl": {
       "value": "${DATA_FABRIC_API_URL}"
     },

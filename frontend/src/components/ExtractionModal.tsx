@@ -6,12 +6,13 @@ import {
   TitleBlockCoords,
   Tender,
   MFilesDocumentClass,
+  MFilesQueueDefault,
   MFilesSearchField,
   MFilesPropertyValue,
   MFilesExtractionProperty,
 } from '../types';
 import { uipathApi, filesApi, tendersApi, sharepointApi, mfilesApi } from '../services/api';
-import { getGraphApiToken } from '../authConfig';
+import { getGraphApiToken, msalInstance } from '../authConfig';
 import Dialog from './Dialog';
 import './CreateTenderModal.css';
 import './ExtractionModal.css';
@@ -57,6 +58,11 @@ interface MFilesFieldSelection {
   value_id: string;
   values: string[];
   value_ids: string[];
+}
+
+interface MFilesLookupMatchResult {
+  matchedValue: MFilesPropertyValue | null;
+  helperMessage: string;
 }
 
 const DEFAULT_MFILES_FIELD_SELECTION: MFilesFieldSelection = {
@@ -108,6 +114,104 @@ function isMultiSelectLookupField(field: MFilesSearchField): boolean {
   return getMFilesDataType(field) === 10;
 }
 
+function getSignedInUserDisplayName(): string {
+  const activeAccount = msalInstance.getActiveAccount() || msalInstance.getAllAccounts()[0];
+  return String(activeAccount?.name || activeAccount?.username || '').trim();
+}
+
+function getSelectionHasValue(field: MFilesSearchField, selection: MFilesFieldSelection): boolean {
+  const dataType = getMFilesDataType(field);
+  if (dataType === 10) {
+    return selection.value_ids.length > 0 && selection.values.length > 0;
+  }
+  if (dataType === 9) {
+    return Boolean(selection.value_id && selection.value.trim());
+  }
+  return Boolean(selection.value.trim());
+}
+
+function getResolvedCurrentUserValue(
+  rule: MFilesQueueDefault | undefined,
+  currentUserDisplayName: string,
+): string {
+  if (!rule || rule.rule_type !== 'current_user') {
+    return '';
+  }
+  return String(rule.text_value || '').trim() || currentUserDisplayName.trim();
+}
+
+function getTextPrefillValue(rule: MFilesQueueDefault | undefined, currentUserDisplayName: string): string {
+  if (!rule) {
+    return '';
+  }
+  if (rule.rule_type === 'fixed_text') {
+    return rule.text_value?.trim() || '';
+  }
+  if (rule.rule_type === 'current_user') {
+    return getResolvedCurrentUserValue(rule, currentUserDisplayName);
+  }
+  return '';
+}
+
+function findLookupDefaultMatch(
+  field: MFilesSearchField,
+  rule: MFilesQueueDefault | undefined,
+  values: MFilesPropertyValue[],
+  currentUserDisplayName: string,
+): MFilesLookupMatchResult {
+  if (!rule) {
+    return { matchedValue: null, helperMessage: '' };
+  }
+
+  const normalizedValues = values.map((item) => ({
+    ...item,
+    normalizedName: item.name.trim().toLowerCase(),
+  }));
+
+  const byId = (rule.lookup_value_id || '').trim();
+  if (rule.rule_type === 'fixed_lookup') {
+    if (byId) {
+      const idMatch = values.find((item) => item.id === byId);
+      if (idMatch) {
+        return { matchedValue: idMatch, helperMessage: '' };
+      }
+    }
+
+    const lookupName = (rule.lookup_value_name || '').trim().toLowerCase();
+    if (!lookupName) {
+      return { matchedValue: null, helperMessage: '' };
+    }
+
+    const nameMatch = normalizedValues.find((item) => item.normalizedName === lookupName);
+    return {
+      matchedValue: nameMatch || null,
+      helperMessage: '',
+    };
+  }
+
+  if (rule.rule_type === 'current_user') {
+    const resolvedCurrentUserValue = getResolvedCurrentUserValue(rule, currentUserDisplayName);
+    const displayValue = resolvedCurrentUserValue.trim().toLowerCase();
+    if (!displayValue) {
+      return { matchedValue: null, helperMessage: '' };
+    }
+
+    const nameMatch = normalizedValues.find((item) => item.normalizedName === displayValue);
+    return {
+      matchedValue: nameMatch || null,
+      helperMessage: nameMatch
+        ? ''
+        : `No M-Files value matched the signed-in user "${resolvedCurrentUserValue}".`,
+    };
+  }
+
+  if (!isLookupField(field)) {
+    return { matchedValue: null, helperMessage: '' };
+  }
+
+  return { matchedValue: null, helperMessage: '' };
+}
+
 const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName, files, onClose, onSubmit }) => {
   const [destination, setDestination] = useState('');
   const [destinations, setDestinations] = useState<Array<{ name: string; path: string }>>([]);
@@ -123,6 +227,8 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
   const [isLoadingMfilesMandatoryFields, setIsLoadingMfilesMandatoryFields] = useState(false);
   const [mfilesMandatoryFieldsError, setMfilesMandatoryFieldsError] = useState('');
   const [mfilesFieldValues, setMfilesFieldValues] = useState<Record<number, MFilesFieldSelection>>({});
+  const [mfilesFieldTouchedById, setMfilesFieldTouchedById] = useState<Record<number, boolean>>({});
+  const [mfilesDefaultHelperByFieldId, setMfilesDefaultHelperByFieldId] = useState<Record<number, string>>({});
   const [mfilesPropertyValuesByFieldId, setMfilesPropertyValuesByFieldId] = useState<Record<number, MFilesPropertyValue[]>>({});
   const [mfilesPropertyValuesLoadingByFieldId, setMfilesPropertyValuesLoadingByFieldId] = useState<Record<number, boolean>>({});
   const [mfilesPropertyValuesErrorByFieldId, setMfilesPropertyValuesErrorByFieldId] = useState<Record<number, string>>({});
@@ -149,7 +255,13 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
   const renderTaskRef = useRef<any>(null);
   const animationFrameRef = useRef<number | null>(null);
   const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null); // Store rendered PDF
+  const mfilesFieldTouchedByIdRef = useRef<Record<number, boolean>>({});
   const isMFilesTender = tenderType === 'mfiles';
+  const currentUserDisplayName = getSignedInUserDisplayName();
+
+  useEffect(() => {
+    mfilesFieldTouchedByIdRef.current = mfilesFieldTouchedById;
+  }, [mfilesFieldTouchedById]);
 
   useEffect(() => {
     let cancelled = false;
@@ -270,6 +382,8 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
 
     setMfilesMandatoryFields([]);
     setMfilesFieldValues({});
+    setMfilesFieldTouchedById({});
+    setMfilesDefaultHelperByFieldId({});
     setMfilesPropertyValuesByFieldId({});
     setMfilesPropertyValuesLoadingByFieldId({});
     setMfilesPropertyValuesErrorByFieldId({});
@@ -298,11 +412,29 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
           mandatoryFields.forEach((field) => {
             const existing = previous[field.id] || DEFAULT_MFILES_FIELD_SELECTION;
             const isLockedProjectField = field.name.trim().toLowerCase() === 'project' && Boolean(tender?.mfiles_project_name);
-            nextValues[field.id] = isLockedProjectField
-              ? { ...existing, value: tender?.mfiles_project_name || '' }
-              : existing;
+            const defaultTextValue = getTextPrefillValue(field.queue_default, currentUserDisplayName);
+
+            if (isLockedProjectField) {
+              nextValues[field.id] = { ...existing, value: tender?.mfiles_project_name || '' };
+              return;
+            }
+
+            if (!isLookupField(field) && defaultTextValue) {
+              nextValues[field.id] = { ...existing, value: defaultTextValue };
+              return;
+            }
+
+            nextValues[field.id] = existing;
           });
           return nextValues;
+        });
+
+        setMfilesDefaultHelperByFieldId(() => {
+          const nextHelpers: Record<number, string> = {};
+          mandatoryFields.forEach((field) => {
+            nextHelpers[field.id] = '';
+          });
+          return nextHelpers;
         });
       } catch (error: any) {
         if (!cancelled) {
@@ -320,7 +452,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [isMFilesTender, mfilesDocumentClass, tender?.mfiles_project_name]);
+  }, [currentUserDisplayName, isMFilesTender, mfilesDocumentClass, tender?.mfiles_project_name]);
 
   useEffect(() => {
     if (!isMFilesTender || mfilesMandatoryFields.length === 0) {
@@ -363,7 +495,61 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
                 value_ids: isMultiSelectLookupField(field) && matched ? [matched.id] : (previous[fieldId]?.value_ids || []),
               },
             }));
+            setMfilesDefaultHelperByFieldId((previous) => ({
+              ...previous,
+              [fieldId]: '',
+            }));
+            return;
           }
+
+          if (mfilesFieldTouchedByIdRef.current[fieldId]) {
+            return;
+          }
+
+          const defaultRule = field.queue_default;
+          const defaultMatch = findLookupDefaultMatch(field, defaultRule, values, currentUserDisplayName);
+          const nextHelper = defaultMatch.helperMessage;
+          setMfilesDefaultHelperByFieldId((previous) => ({
+            ...previous,
+            [fieldId]: nextHelper,
+          }));
+
+          if (!defaultMatch.matchedValue) {
+            return;
+          }
+
+          const matchedValue = defaultMatch.matchedValue;
+
+          setMfilesFieldValues((previous) => {
+            const existing = previous[fieldId] || DEFAULT_MFILES_FIELD_SELECTION;
+            if (getSelectionHasValue(field, existing)) {
+              return previous;
+            }
+
+            if (isMultiSelectLookupField(field)) {
+              return {
+                ...previous,
+                [fieldId]: {
+                  ...existing,
+                  value: matchedValue.name,
+                  value_id: matchedValue.id,
+                  values: [matchedValue.name],
+                  value_ids: [matchedValue.id],
+                },
+              };
+            }
+
+            return {
+              ...previous,
+              [fieldId]: {
+                ...existing,
+                value: matchedValue.name,
+                value_id: matchedValue.id,
+                values: [],
+                value_ids: [],
+              },
+            };
+          });
         })
         .catch((error: any) => {
           if (!cancelled) {
@@ -384,7 +570,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
     return () => {
       cancelled = true;
     };
-  }, [isMFilesTender, mfilesMandatoryFields, tender?.mfiles_project_name]);
+  }, [currentUserDisplayName, isMFilesTender, mfilesMandatoryFields, tender?.mfiles_project_name]);
 
   // Check page sizes when title block processing is toggled on
   useEffect(() => {
@@ -792,7 +978,11 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
     drawSelection();
   };
 
-  const updateMfilesFieldSelection = (fieldId: number, patch: Partial<MFilesFieldSelection>) => {
+  const updateMfilesFieldSelection = (
+    fieldId: number,
+    patch: Partial<MFilesFieldSelection>,
+    options?: { markTouched?: boolean; clearHelper?: boolean },
+  ) => {
     setMfilesFieldValues((previous) => ({
       ...previous,
       [fieldId]: {
@@ -800,6 +990,20 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
         ...patch,
       },
     }));
+
+    if (options?.markTouched !== false) {
+      setMfilesFieldTouchedById((previous) => ({
+        ...previous,
+        [fieldId]: true,
+      }));
+    }
+
+    if (options?.clearHelper !== false) {
+      setMfilesDefaultHelperByFieldId((previous) => ({
+        ...previous,
+        [fieldId]: '',
+      }));
+    }
   };
 
   useEffect(() => {
@@ -1090,6 +1294,7 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
                     const propertyValues = mfilesPropertyValuesByFieldId[field.id] || [];
                     const loadingPropertyValues = Boolean(mfilesPropertyValuesLoadingByFieldId[field.id]);
                     const propertyValuesError = mfilesPropertyValuesErrorByFieldId[field.id];
+                    const defaultHelperMessage = mfilesDefaultHelperByFieldId[field.id];
                     const isLockedProjectField = field.name.trim().toLowerCase() === 'project' && Boolean(tender?.mfiles_project_name);
                     const valueFilter = (mfilesPropertyValueFilterByFieldId[field.id] || '').trim().toLowerCase();
                     const filteredPropertyValues = valueFilter
@@ -1310,6 +1515,9 @@ const ExtractionModal: React.FC<ExtractionModalProps> = ({ tenderId, tenderName,
 
                         {loadingPropertyValues && (
                           <div className="mfiles-extraction-helper">Loading values...</div>
+                        )}
+                        {defaultHelperMessage && (
+                          <div className="mfiles-extraction-helper">{defaultHelperMessage}</div>
                         )}
                         {propertyValuesError && <div className="mfiles-extraction-error">{propertyValuesError}</div>}
                       </div>

@@ -223,6 +223,23 @@ class DualMetadataStore(MetadataStore):
         self.blob_store.delete_batch(tender_id, batch_id)
         return deleted
 
+    def get_mfiles_queue_defaults(self) -> Optional[Dict]:
+        try:
+            self._log_primary('get_mfiles_queue_defaults')
+            config = self.cosmos_store.get_mfiles_queue_defaults()
+            if config is None and self.read_fallback:
+                return self._fallback('get_mfiles_queue_defaults')
+            return config
+        except Exception:
+            if self.read_fallback:
+                return self._fallback('get_mfiles_queue_defaults')
+            raise
+
+    def upsert_mfiles_queue_defaults(self, config: Dict) -> Dict:
+        result = self.cosmos_store.upsert_mfiles_queue_defaults(config)
+        self.blob_store.upsert_mfiles_queue_defaults(config)
+        return result
+
     def check_health(self) -> Dict:
         cosmos_health = self.cosmos_store.check_health()
         blob_health = self.blob_store.check_health()

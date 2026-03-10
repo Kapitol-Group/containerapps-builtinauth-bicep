@@ -4,6 +4,7 @@ import {
     TenderFile,
     ExtractionJob,
     ApiResponse,
+    FrontendConfig,
     TitleBlockCoords,
     Batch,
     BatchWithFiles,
@@ -17,6 +18,8 @@ import {
     MFilesImportDocument,
     MFilesExtractionProperty,
     ImportJobStatus,
+    MFilesQueueDefaultsResponse,
+    MFilesQueueDefaultRule,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || '/api';
@@ -30,8 +33,8 @@ const api = axios.create({
 
 // Config API
 export const configApi = {
-    get: async (): Promise<{ entraClientId: string; entraTenantId: string; sharepointBaseUrl: string }> => {
-        const response = await api.get<ApiResponse<{ entraClientId: string; entraTenantId: string; sharepointBaseUrl: string }>>('/config');
+    get: async (): Promise<FrontendConfig> => {
+        const response = await api.get<ApiResponse<FrontendConfig>>('/config');
         if (!response.data.success || !response.data.data) {
             throw new Error('Failed to fetch configuration');
         }
@@ -413,6 +416,26 @@ export const mfilesApi = {
         const response = await api.get<ApiResponse<ImportJobStatus>>(`/mfiles/import-jobs/${jobId}`);
         if (!response.data.success || !response.data.data) {
             throw new Error(response.data.error || 'Failed to get M-Files import job status');
+        }
+        return response.data.data;
+    },
+};
+
+export const adminApi = {
+    getMFilesQueueDefaults: async (): Promise<MFilesQueueDefaultsResponse> => {
+        const response = await api.get<ApiResponse<MFilesQueueDefaultsResponse>>('/admin/mfiles-queue-defaults');
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to fetch M-Files queue defaults');
+        }
+        return response.data.data;
+    },
+
+    saveMFilesQueueDefaults: async (rules: MFilesQueueDefaultRule[]): Promise<MFilesQueueDefaultsResponse> => {
+        const response = await api.put<ApiResponse<MFilesQueueDefaultsResponse>>('/admin/mfiles-queue-defaults', {
+            rules,
+        });
+        if (!response.data.success || !response.data.data) {
+            throw new Error(response.data.error || 'Failed to save M-Files queue defaults');
         }
         return response.data.data;
     },

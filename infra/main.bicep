@@ -39,6 +39,9 @@ param mfilesClientId string = ''
 @description('M-Files API client secret')
 param mfilesClientSecret string = ''
 
+@description('Comma-separated Entra group object IDs allowed to manage M-Files queue defaults')
+param mfilesDefaultsAdminGroupIds string = ''
+
 @description('Data Fabric API URL')
 param dataFabricApiUrl string = ''
 
@@ -175,6 +178,7 @@ module aca 'aca.bicep' = {
     mfilesBaseUrl: mfilesBaseUrl
     mfilesClientId: mfilesClientId
     mfilesClientSecret: mfilesClientSecret
+    mfilesDefaultsAdminGroupIds: mfilesDefaultsAdminGroupIds
     customHostName: customHostName
     customCertificateName: customCertificateName
     // Data Fabric configuration
