@@ -21,9 +21,18 @@ def main() -> None:
 
     configure_process_telemetry('kapitol-extraction-worker')
 
+    # Suppress verbose Azure SDK logging
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
+        logging.WARNING
+    )
+    logging.getLogger("azure.cosmos").setLevel(logging.WARNING)
+    logging.getLogger("azure.identity").setLevel(logging.WARNING)
+    logging.getLogger("azure.core").setLevel(logging.WARNING)
+
     blob_service = BlobStorageService(
         account_name=os.getenv('AZURE_STORAGE_ACCOUNT_NAME'),
-        container_name=os.getenv('AZURE_STORAGE_CONTAINER_NAME', 'tender-documents'),
+        container_name=os.getenv(
+            'AZURE_STORAGE_CONTAINER_NAME', 'tender-documents'),
     )
     metadata_store = build_metadata_store(blob_service)
     submission_store = EntityStoreSubmissionService(
@@ -40,7 +49,8 @@ def main() -> None:
     telemetry = ExtractionTelemetry('kapitol-extraction-worker')
 
     if not submission_store.is_configured:
-        raise RuntimeError("Metadata-backed extraction state store is not configured")
+        raise RuntimeError(
+            "Metadata-backed extraction state store is not configured")
     if not queue_service.is_configured:
         raise RuntimeError("Extraction queue is not configured")
     if not vision_extractor.is_configured:
