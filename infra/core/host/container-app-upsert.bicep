@@ -7,7 +7,7 @@ param containerName string = 'main'
 param containerRegistryName string
 
 @description('Minimum number of replicas to run')
-@minValue(1)
+@minValue(0)
 param containerMinReplicas int = 1
 @description('Maximum number of replicas to run')
 @minValue(1)
@@ -15,6 +15,7 @@ param containerMaxReplicas int = 10
 
 param secrets array = []
 param env array = []
+param scaleRules array = []
 param external bool = true
 param targetPort int = 80
 param exists bool
@@ -71,7 +72,8 @@ module app 'container-app.bicep' = {
     secrets: secrets
     external: external
     env: env
-    imageName: exists ? existingApp.properties.template.containers[0].image : ''
+    scaleRules: scaleRules
+    imageName: exists ? existingApp!.properties.template.containers[0].image : ''
     targetPort: targetPort
     customHostName: customHostName
     customCertificateName: customCertificateName

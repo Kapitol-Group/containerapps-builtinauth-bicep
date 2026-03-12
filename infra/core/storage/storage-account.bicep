@@ -10,6 +10,9 @@ param tags object = {}
 @description('Enable hierarchical namespace (for folder support)')
 param isHnsEnabled bool = true
 
+@description('Name of the Azure Storage Queue used for internal extraction work')
+param queueName string = 'drawing-extraction'
+
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: name
   location: location
@@ -51,7 +54,18 @@ resource tenderDocumentsContainer 'Microsoft.Storage/storageAccounts/blobService
   }
 }
 
+resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-01-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource extractionQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@2023-01-01' = {
+  parent: queueService
+  name: queueName
+}
+
 output id string = storageAccount.id
 output name string = storageAccount.name
 output primaryEndpoints object = storageAccount.properties.primaryEndpoints
 output containerName string = tenderDocumentsContainer.name
+output queueName string = extractionQueue.name

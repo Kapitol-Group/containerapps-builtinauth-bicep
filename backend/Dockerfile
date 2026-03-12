@@ -16,17 +16,17 @@ FROM python:3.12
 
 WORKDIR /code
 
+COPY backend/entity-store-transformation-client ./entity-store-transformation-client
 COPY backend/requirements.txt .
 
 RUN pip3 install -r requirements.txt
 
 COPY backend/ .
-
-RUN pip3 install -e ./entity-store-transformation-client
+RUN chmod +x /code/entrypoint.sh
 
 # Copy built frontend from previous stage
 COPY --from=frontend-build /frontend/build ./frontend_build
 
 EXPOSE 50505
 
-ENTRYPOINT ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+ENTRYPOINT ["./entrypoint.sh"]

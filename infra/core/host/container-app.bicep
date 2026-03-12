@@ -7,7 +7,7 @@ param containerName string = 'main'
 param containerRegistryName string
 
 @description('Minimum number of replicas to run')
-@minValue(1)
+@minValue(0)
 param containerMinReplicas int = 1
 @description('Maximum number of replicas to run')
 @minValue(1)
@@ -15,6 +15,7 @@ param containerMaxReplicas int = 10
 
 param secrets array = []
 param env array = []
+param scaleRules array = []
 param external bool = true
 param imageName string
 param targetPort int = 80
@@ -126,6 +127,7 @@ resource app 'Microsoft.App/containerApps@2022-03-01' = {
       scale: {
         minReplicas: containerMinReplicas
         maxReplicas: containerMaxReplicas
+        rules: scaleRules
       }
     }
   }
@@ -143,5 +145,5 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2022-02-01-pr
 output defaultDomain string = containerAppsEnvironment.properties.defaultDomain
 output imageName string = imageName
 output name string = app.name
-output uri string = 'https://${app.properties.configuration.ingress.fqdn}'
+output uri string = ingressEnabled ? 'https://${app.properties.configuration.ingress.fqdn}' : ''
 output identityResourceId string = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', userIdentity.name)

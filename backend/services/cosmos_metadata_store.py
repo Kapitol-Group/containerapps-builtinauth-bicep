@@ -153,6 +153,7 @@ class CosmosMetadataStore(MetadataStore):
     @staticmethod
     def _to_file(doc: Dict) -> Dict:
         return {
+            'id': doc.get('id'),
             'name': doc.get('name') or (doc.get('path', '').split('/')[-1] if doc.get('path') else None),
             'path': doc.get('path'),
             'size': int(doc.get('size', 0)),
@@ -164,6 +165,17 @@ class CosmosMetadataStore(MetadataStore):
             'source': doc.get('source', 'local'),
             'batch_id': doc.get('batch_id') or None,
             'submitted_at': doc.get('submitted_at'),
+            'updated_at': doc.get('updated_at'),
+            'extraction_status': doc.get('extraction_status'),
+            'provider': doc.get('provider'),
+            'drawing_number': doc.get('drawing_number'),
+            'drawing_revision': doc.get('drawing_revision'),
+            'drawing_title': doc.get('drawing_title'),
+            'transaction_id': doc.get('transaction_id'),
+            'destination_path': doc.get('destination_path'),
+            'last_error': doc.get('last_error'),
+            'extracted_at': doc.get('extracted_at'),
+            'extraction_reference': doc.get('extraction_reference'),
         }
 
     def _batch_file_paths(self, tender_id: str, batch_id: str) -> List[str]:
@@ -545,6 +557,7 @@ class CosmosMetadataStore(MetadataStore):
             raise ValueError("File record requires path")
 
         doc_id = self._file_doc_id(file_path)
+        existing = self._read_item(self.metadata_container, doc_id, tender_id) or {}
         doc = {
             'id': doc_id,
             'doc_type': 'file',
@@ -561,10 +574,20 @@ class CosmosMetadataStore(MetadataStore):
             'batch_id': file_record.get('batch_id') or '',
             'submitted_at': file_record.get('submitted_at'),
             'updated_at': self._utc_now(),
+            'extraction_status': file_record.get('extraction_status', existing.get('extraction_status', '')),
+            'provider': file_record.get('provider', existing.get('provider', '')),
+            'drawing_number': file_record.get('drawing_number', existing.get('drawing_number', '')),
+            'drawing_revision': file_record.get('drawing_revision', existing.get('drawing_revision', '')),
+            'drawing_title': file_record.get('drawing_title', existing.get('drawing_title', '')),
+            'transaction_id': file_record.get('transaction_id', existing.get('transaction_id', '')),
+            'destination_path': file_record.get('destination_path', existing.get('destination_path', '')),
+            'last_error': file_record.get('last_error', existing.get('last_error', '')),
+            'extracted_at': file_record.get('extracted_at', existing.get('extracted_at', '')),
+            'extraction_reference': file_record.get('extraction_reference', existing.get('extraction_reference', '')),
         }
         for attempt in range(1, FILE_COUNT_RETRY_LIMIT + 1):
-            existing = self._read_item(self.metadata_container, doc_id, tender_id)
-            if existing:
+            current = self._read_item(self.metadata_container, doc_id, tender_id)
+            if current:
                 self.metadata_container.upsert_item(doc)
                 return self._to_file(doc)
 
@@ -944,6 +967,16 @@ class CosmosMetadataStore(MetadataStore):
             doc['batch_id'] = ''
             doc['submitted_at'] = None
             doc['category'] = 'uncategorized'
+            doc['extraction_status'] = ''
+            doc['provider'] = ''
+            doc['drawing_number'] = ''
+            doc['drawing_revision'] = ''
+            doc['drawing_title'] = ''
+            doc['transaction_id'] = ''
+            doc['destination_path'] = ''
+            doc['last_error'] = ''
+            doc['extracted_at'] = ''
+            doc['extraction_reference'] = ''
             doc['updated_at'] = self._utc_now()
             self.metadata_container.upsert_item(doc)
 

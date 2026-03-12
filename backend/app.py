@@ -19,9 +19,11 @@ from werkzeug.datastructures import FileStorage
 import requests
 
 from services.blob_storage import BlobStorageService, sanitize_metadata_value
+from services.entity_store_submission_service import EntityStoreSubmissionService
+from services.extraction_queue import ExtractionBatchMessage, ExtractionQueueService
+from services.extraction_telemetry import ExtractionTelemetry, configure_process_telemetry
 from services.mfiles_client import MFilesClient, MFilesClientError, MFilesConfigurationError
 from services.metadata_store_factory import build_metadata_store
-from services.uipath_client import UiPathClient
 from utils.auth import extract_group_claims, extract_group_ids, extract_user_info, require_auth
 
 # Configure logging
@@ -30,6 +32,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+configure_process_telemetry('kapitol-backend-api')
 
 # Suppress verbose Azure SDK logging
 logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
@@ -63,15 +66,14 @@ blob_service = BlobStorageService(
 )
 metadata_store = build_metadata_store(blob_service)
 
-uipath_client = UiPathClient(
-    tenant_name=os.getenv('UIPATH_TENANT_NAME'),
-    app_id=os.getenv('UIPATH_APP_ID'),
-    api_key=os.getenv('UIPATH_API_KEY'),
-    folder_id=os.getenv('UIPATH_FOLDER_ID'),
-    queue_name=os.getenv('UIPATH_QUEUE_NAME'),
-    data_fabric_url=os.getenv('DATA_FABRIC_API_URL'),
-    data_fabric_key=os.getenv('DATA_FABRIC_API_KEY')
+submission_store = EntityStoreSubmissionService(
+    metadata_store=metadata_store,
 )
+extraction_queue = ExtractionQueueService(
+    account_name=os.getenv('AZURE_STORAGE_ACCOUNT_NAME', ''),
+    queue_name=os.getenv('EXTRACTION_QUEUE_NAME', 'drawing-extraction'),
+)
+extraction_telemetry = ExtractionTelemetry('kapitol-backend-api')
 
 mfiles_client = MFilesClient(
     base_url=os.getenv('MFILES_BASE_URL', ''),
@@ -950,6 +952,19 @@ def _mark_batch_submission_failed(tender_id: str, batch_id: str, error: object,
         )
 
 
+def _validate_pdf_file_paths(tender_id: str, file_paths: List[str]) -> None:
+    for file_path in file_paths:
+        file_record = metadata_store.get_file(tender_id, file_path)
+        if not file_record:
+            raise ValueError(f"File not found: {file_path}")
+
+        content_type = str(file_record.get('content_type') or '').lower()
+        if not file_path.lower().endswith('.pdf') and 'pdf' not in content_type:
+            raise ValueError(
+                f"Only PDF drawings are supported for internal extraction: {file_path}"
+            )
+
+
 # Log startup info
 logger.info("=" * 60)
 logger.info("Construction Tender Automation Backend Starting")
@@ -958,7 +973,9 @@ logger.info(
 logger.info(
     f"Container Name: {os.getenv('AZURE_STORAGE_CONTAINER_NAME', 'tender-documents')}")
 logger.info(f"Metadata Store Mode: {os.getenv('METADATA_STORE_MODE', 'blob')}")
-logger.info(f"UiPath Mock Mode: {os.getenv('UIPATH_MOCK_MODE', 'true')}")
+logger.info(
+    f"Extraction Queue Name: {os.getenv('EXTRACTION_QUEUE_NAME', 'drawing-extraction')}"
+)
 logger.info("=" * 60)
 
 # ========== Web Routes (existing functionality) ==========
@@ -1600,7 +1617,7 @@ def get_mfiles_import_job_status(job_id: str):
             'error': str(e)
         }), 500
 
-# UiPath API
+# Extraction queue helpers
 
 
 def _process_uipath_submission_async(
@@ -1620,15 +1637,18 @@ def _process_uipath_submission_async(
     claim_allowed_statuses: Optional[list] = None,
     attempt_source: str = 'submission',
     claim_owner: Optional[str] = None,
+    raise_on_error: bool = False,
+    reset_failed_files: bool = False,
 ):
     """
-    Background worker to submit extraction job to UiPath.
-    Runs in separate thread to avoid blocking the HTTP response.
-    Updates batch metadata with success/failure details.
+    Submit a batch to the internal extraction queue after ensuring Entity Store records exist.
+    This function remains idempotent so manual retries and automatic stuck-batch retries can reuse it.
     """
     try:
         logger.info(
-            "[Background] Starting UiPath submission for batch %s", batch_id)
+            "[Submission] Starting internal extraction submission for batch %s",
+            batch_id
+        )
 
         batch = None
         if claim_before_submit:
@@ -1654,52 +1674,53 @@ def _process_uipath_submission_async(
             batch = metadata_store.get_batch(tender_id, batch_id)
             if not batch:
                 logger.warning(
-                    "[Background] Batch %s not found during submission", batch_id)
+                    "[Submission] Batch %s not found during submission", batch_id)
                 return
-
-        resolved_mfiles_document_class = str(
-            mfiles_document_class
-            or (batch.get('mfiles_document_class') if batch else '')
-            or ''
-        ).strip()
-        resolved_mfiles_properties = (
-            mfiles_properties
-            if mfiles_properties is not None
-            else (batch.get('mfiles_properties') if batch else [])
-        ) or []
 
         attempts = batch.get('submission_attempts', []) if batch else []
         existing_reference = batch.get('uipath_reference', '') if batch else ''
+        reference = existing_reference or f"batch-{batch_id}"
 
-        job = uipath_client.submit_extraction_job(
-            tender_id=tender_name,
+        context = submission_store.ensure_submission_records(
+            tender_id=tender_id,
             file_paths=file_paths,
-            discipline=category,
-            title_block_coords=title_block_coords,
             submitted_by=user_email,
-            batch_id=batch_id,
+            reference=reference,
             sharepoint_folder_path=sharepoint_folder_path,
             output_folder_path=output_folder_path,
             folder_list=folder_list,
-            reference=existing_reference or None,
-            mfiles_document_class=resolved_mfiles_document_class,
-            mfiles_properties=resolved_mfiles_properties,
+            reset_failed_files=reset_failed_files or bool(
+                batch and batch.get('status') == 'failed'
+            ),
+        )
+        extraction_queue.enqueue_batch(
+            ExtractionBatchMessage(
+                tender_id=tender_id,
+                batch_id=batch_id,
+                reference=context.reference,
+            )
+        )
+        extraction_telemetry.record_enqueue(
+            tender_id=tender_id,
+            batch_id=batch_id,
+            file_count=len(file_paths),
         )
 
         logger.info(
-            "[Background] Successfully submitted batch %s to UiPath with reference %s",
-            batch_id, job.get('reference')
+            "[Submission] Successfully queued batch %s with reference %s",
+            batch_id,
+            context.reference,
         )
 
         if attempts and attempts[-1].get('status') == 'in_progress':
             attempts[-1]['status'] = 'success'
-            attempts[-1]['reference'] = job.get('reference', '')
+            attempts[-1]['reference'] = context.reference
 
         updated = metadata_store.update_batch(tender_id, batch_id, {
             'status': 'running',
-            'uipath_reference': job.get('reference', ''),
-            'uipath_submission_id': job.get('submission_id', ''),
-            'uipath_project_id': job.get('project_id', ''),
+            'uipath_reference': context.reference,
+            'uipath_submission_id': context.submission_id,
+            'uipath_project_id': context.project_id,
             'submission_attempts': attempts,
             'last_error': '',
             'submission_owner': '',
@@ -1707,11 +1728,11 @@ def _process_uipath_submission_async(
         })
         if not updated:
             raise RuntimeError(
-                "Batch metadata update returned no result after UiPath submission")
+                "Batch metadata update returned no result after queue submission")
 
     except ValueError as user_error:
         logger.error(
-            "[Background] User validation failed for batch %s: %s",
+            "[Submission] User validation failed for batch %s: %s",
             batch_id, user_error
         )
         _mark_batch_submission_failed(
@@ -1720,10 +1741,12 @@ def _process_uipath_submission_async(
             error=user_error,
             prefix='User validation failed: '
         )
+        if raise_on_error:
+            raise
 
     except Exception as e:
         logger.error(
-            "[Background] UiPath submission failed for batch %s: %s",
+            "[Submission] Internal extraction submission failed for batch %s: %s",
             batch_id, e, exc_info=True
         )
         _mark_batch_submission_failed(
@@ -1731,12 +1754,14 @@ def _process_uipath_submission_async(
             batch_id=batch_id,
             error=e
         )
+        if raise_on_error:
+            raise
 
 
 def retry_stuck_batches():
     """
     Background worker that periodically retries batches stuck in 'pending' status.
-    Runs every 5 minutes to find and retry batches that failed to submit to UiPath.
+    Runs every 5 minutes to find and retry batches that failed before they were enqueued.
     """
     logger.info("[Retry Worker] Starting stuck batch retry worker")
 
@@ -2759,7 +2784,7 @@ def get_batch_progress_summary(tender_id: str):
                     }
                     continue
 
-                progress = uipath_client.get_batch_progress(reference)
+                progress = submission_store.get_batch_progress(reference)
                 status_counts = progress.get('status_counts') or {}
                 progress_by_batch[batch_id] = {
                     'batch_id': batch_id,
@@ -2949,6 +2974,8 @@ def retry_batch(tender_id: str, batch_id: str):
                 'error': 'Batch has no files to process'
             }), 400
 
+        _validate_pdf_file_paths(tender_id, file_paths)
+
         owner = _build_submission_owner('manual-retry')
         claimed = metadata_store.claim_batch_for_submission(
             tender_id=tender_id,
@@ -2965,38 +2992,32 @@ def retry_batch(tender_id: str, batch_id: str):
                 'error': 'Batch retry was not started because another submission process already claimed this batch.'
             }), 409
 
-        # Spawn background thread to retry submission
         logger.info(
             f"Manual retry initiated for batch {batch_id} in tender {tender_id} by {user_email}")
 
-        retry_thread = threading.Thread(
-            target=_process_uipath_submission_async,
-            args=(
-                tender_id,
-                tender_name,
-                batch_id,
-                file_paths,
-                category,
-                title_block_coords,
-                user_email,
-                sharepoint_folder_path,
-                output_folder_path,
-                folder_list,
-                mfiles_document_class,
-                mfiles_properties,
-            ),
-            kwargs={
-                'claim_before_submit': False,
-                'attempt_source': 'manual-retry',
-                'claim_owner': owner,
-            },
-            daemon=True
+        _process_uipath_submission_async(
+            tender_id,
+            tender_name,
+            batch_id,
+            file_paths,
+            category,
+            title_block_coords,
+            user_email,
+            sharepoint_folder_path,
+            output_folder_path,
+            folder_list,
+            mfiles_document_class,
+            mfiles_properties,
+            claim_before_submit=False,
+            attempt_source='manual-retry',
+            claim_owner=owner,
+            raise_on_error=True,
+            reset_failed_files=(status == 'failed'),
         )
-        retry_thread.start()
 
         return jsonify({
             'success': True,
-            'message': 'Batch retry initiated. Processing in background.'
+            'message': 'Batch retry initiated and queued for extraction.'
         }), 202
 
     except Exception as e:
@@ -3038,7 +3059,7 @@ def delete_batch(tender_id: str, batch_id: str):
 @require_auth
 def get_batch_progress(tender_id: str, batch_id: str):
     """
-    Get file-level progress for a batch by querying Entity Store
+    Get file-level progress for a batch by querying internal extraction state
 
     Returns aggregated status counts and per-file details including:
     - Total file count
@@ -3046,7 +3067,6 @@ def get_batch_progress(tender_id: str, batch_id: str):
     - Per-file metadata (status, drawing_number, etc.)
     """
     try:
-        # Get batch to retrieve CUID reference
         batch = metadata_store.get_batch(tender_id, batch_id)
         if not batch:
             return jsonify({
@@ -3056,11 +3076,10 @@ def get_batch_progress(tender_id: str, batch_id: str):
 
         reference = batch.get('uipath_reference')
 
-        # If batch not yet submitted to UiPath, return default progress
         if not reference:
             file_count = int(batch.get('file_count', 0))
             logger.info(
-                f"Batch {batch_id} not yet submitted to UiPath. Returning default progress.")
+                f"Batch {batch_id} not yet queued for extraction. Returning default progress.")
             return jsonify({
                 'success': True,
                 'data': {
@@ -3076,10 +3095,9 @@ def get_batch_progress(tender_id: str, batch_id: str):
                 }
             })
 
-        # Query Entity Store for file-level progress
         logger.info(
-            f"Querying Entity Store progress for batch {batch_id} with reference {reference}")
-        progress = uipath_client.get_batch_progress(reference)
+            f"Querying internal extraction progress for batch {batch_id} with reference {reference}")
+        progress = submission_store.get_batch_progress(reference)
 
         # Add batch_id to response
         progress['batch_id'] = batch_id
@@ -3274,13 +3292,13 @@ def purge_old_batches():
             'error': str(e)
         }), 500
 
-# UiPath API
+# Extraction API
 
 
 @app.post('/api/uipath/extract')
 @require_auth
 def queue_extraction():
-    """Queue drawing metadata extraction via UiPath - creates batch and submits job"""
+    """Queue drawing metadata extraction via the internal worker pipeline."""
     try:
         data = request.get_json(silent=True) or {}
         tender_id = str(data.get('tender_id') or '').strip()
@@ -3349,6 +3367,8 @@ def queue_extraction():
                 'error': 'Missing required field for sharepoint tender: destination (or discipline)'
             }), 400
 
+        _validate_pdf_file_paths(tender_id, file_paths)
+
         batch_name = data.get(
             'batch_name', f"{category} Batch {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}")
 
@@ -3414,45 +3434,38 @@ def queue_extraction():
                 'error': 'Batch was created but could not be claimed for submission. Please retry.'
             }), 409
 
-        # Start UiPath submission in background thread to avoid timeout
-        # The batch is already created and files are categorized, so we can return immediately
-        submission_thread = threading.Thread(
-            target=_process_uipath_submission_async,
-            args=(
-                tender_id,
-                tender_name,
-                batch['batch_id'],
-                file_paths,
-                category,
-                title_block_coords,
-                user_email,
-                sharepoint_folder_path,
-                output_folder_path,
-                folder_list,
-                mfiles_document_class if is_mfiles_tender else '',
-                validated_mfiles_properties if is_mfiles_tender else [],
-            ),
-            kwargs={
-                'claim_before_submit': False,
-                'attempt_source': 'initial-submit',
-                'claim_owner': owner,
-            },
-            daemon=True  # Daemon thread will not block app shutdown
+        _process_uipath_submission_async(
+            tender_id,
+            tender_name,
+            batch['batch_id'],
+            file_paths,
+            category,
+            title_block_coords,
+            user_email,
+            sharepoint_folder_path,
+            output_folder_path,
+            folder_list,
+            mfiles_document_class if is_mfiles_tender else '',
+            validated_mfiles_properties if is_mfiles_tender else [],
+            claim_before_submit=False,
+            attempt_source='initial-submit',
+            claim_owner=owner,
+            raise_on_error=True,
         )
-        submission_thread.start()
+        updated_batch = metadata_store.get_batch(tender_id, batch['batch_id']) or claimed
 
         logger.info(
-            f"Successfully created batch {batch['batch_id']} and queued for UiPath submission (processing in background)")
+            "Successfully created batch %s and queued it for internal extraction",
+            batch['batch_id']
+        )
 
-        # Return immediately with batch details
-        # The UiPath submission will complete in the background
         return jsonify({
             'success': True,
             'data': {
                 'batch_id': batch['batch_id'],
-                'status': claimed.get('status', 'submitting'),
-                'message': f'Batch created successfully. Processing {len(file_paths)} files in background.',
-                'batch': claimed
+                'status': updated_batch.get('status', 'running'),
+                'message': f'Batch created successfully. Queued {len(file_paths)} files for extraction.',
+                'batch': updated_batch
             }
         }), 202
 
@@ -3485,18 +3498,11 @@ def queue_extraction():
 @app.get('/api/uipath/jobs/<job_id>')
 @require_auth
 def get_job_status(job_id: str):
-    """Get UiPath job status"""
-    try:
-        status = uipath_client.get_job_status(job_id)
-        return jsonify({
-            'success': True,
-            'data': status
-        })
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+    """Legacy route retained for compatibility; internal extraction is batch-scoped."""
+    return jsonify({
+        'success': False,
+        'error': 'Per-job status is not available for internal extraction. Use batch progress endpoints instead.'
+    }), 410
 
 # SharePoint API (placeholder for future integration)
 

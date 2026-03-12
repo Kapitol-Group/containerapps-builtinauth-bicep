@@ -18,7 +18,7 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2022-03-01'
         sharedKey: logAnalyticsWorkspace.listKeys().primarySharedKey
       }
     }
-    daprAIInstrumentationKey: daprEnabled && !empty(applicationInsightsName) ? applicationInsights.properties.InstrumentationKey : ''
+    daprAIInstrumentationKey: daprEnabled && !empty(applicationInsightsName) ? applicationInsights!.properties.InstrumentationKey : ''
   }
 }
 

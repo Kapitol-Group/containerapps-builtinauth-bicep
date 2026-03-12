@@ -10,6 +10,7 @@ param name string
 param location string
 
 param acaExists bool = false
+param workerExists bool = false
 
 @description('Custom domain hostname (optional)')
 param customHostName string = ''
@@ -52,6 +53,25 @@ param dataFabricApiKey string = ''
 @secure()
 @description('Shared secret key required by /api/webhooks/batch-complete header validation')
 param webhookBatchCompleteKey string = ''
+
+@description('Azure OpenAI endpoint for internal title-block extraction')
+param azureOpenAiEndpoint string = ''
+
+@description('Azure OpenAI deployment name for internal title-block extraction')
+param azureOpenAiExtractionDeployment string = ''
+
+@secure()
+@description('Azure OpenAI API key for internal title-block extraction')
+param azureOpenAiApiKey string = ''
+
+@description('Azure Storage Queue name for internal title-block extraction work')
+param extractionQueueName string = 'drawing-extraction'
+
+@description('PDF render DPI for internal title-block extraction')
+param extractionRenderDpi string = '300'
+
+@description('Per-replica extraction worker concurrency')
+param extractionWorkerConcurrency string = '2'
 
 @description('Batch progress polling interval in milliseconds (default: 30000 = 30 seconds)')
 param batchProgressPollingInterval string = '30000'
@@ -102,6 +122,7 @@ resource resourceGroup 'Microsoft.Resources/resourceGroups@2021-04-01' = {
 }
 
 var prefix = toLower('${name}-${resourceToken}')
+var storageAccountName = '${take(replace(prefix, '-', ''), 17)}storage'
 
 // Container apps environment (including container registry)
 module containerApps 'core/host/container-apps.bicep' = {
@@ -127,17 +148,32 @@ module logAnalyticsWorkspace 'core/monitor/loganalytics.bicep' = {
   }
 }
 
+module applicationInsights 'core/monitor/applicationinsights.bicep' = {
+  name: 'applicationinsights'
+  scope: resourceGroup
+  params: {
+    name: replace('${take(prefix, 35)}-appi', '--', '-')
+    dashboardName: replace('${take(prefix, 40)}-appi-dashboard', '--', '-')
+    location: location
+    tags: tags
+    logAnalyticsWorkspaceId: logAnalyticsWorkspace.outputs.id
+  }
+}
+
 // Storage account for tender documents (created first without role assignments)
 module storage 'core/storage/storage-account.bicep' = {
   name: 'storage'
   scope: resourceGroup
   params: {
-    name: '${take(replace(prefix, '-', ''), 17)}storage'
+    name: storageAccountName
     location: location
     tags: tags
     isHnsEnabled: true
+    queueName: extractionQueueName
   }
 }
+var storageAccountKey = listKeys(resourceId(subscription().subscriptionId, resourceGroup.name, 'Microsoft.Storage/storageAccounts', storageAccountName), '2023-01-01').keys[0].value
+var storageQueueConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};AccountKey=${storageAccountKey};EndpointSuffix=${environment().suffixes.storage}'
 
 module cosmos 'core/data/cosmos-account.bicep' = {
   name: 'cosmos'
@@ -163,6 +199,12 @@ module aca 'aca.bicep' = {
     containerAppsEnvironmentName: containerApps.outputs.environmentName
     containerRegistryName: containerApps.outputs.registryName
     exists: acaExists
+    appRole: 'api'
+    ingressEnabled: true
+    external: true
+    containerMinReplicas: 1
+    containerMaxReplicas: 10
+    targetPort: 50505
     storageAccountName: storage.outputs.name
     storageContainerName: storage.outputs.containerName
     uipathMockMode: 'true'
@@ -194,6 +236,72 @@ module aca 'aca.bicep' = {
     cosmosBatchReferenceContainerName: cosmos.outputs.batchReferenceContainerName
     metadataStoreMode: metadataStoreMode
     metadataReadFallback: metadataReadFallback
+    azureOpenAiEndpoint: azureOpenAiEndpoint
+    azureOpenAiExtractionDeployment: azureOpenAiExtractionDeployment
+    azureOpenAiApiKey: azureOpenAiApiKey
+    extractionQueueName: storage.outputs.queueName
+    extractionRenderDpi: extractionRenderDpi
+    extractionWorkerConcurrency: extractionWorkerConcurrency
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
+  }
+}
+
+module worker 'aca.bicep' = {
+  name: 'worker'
+  scope: resourceGroup
+  params: {
+    name: replace('${take(prefix, 19)}-worker', '--', '-')
+    location: location
+    tags: tags
+    identityName: '${prefix}-id-worker'
+    containerAppsEnvironmentName: containerApps.outputs.environmentName
+    containerRegistryName: containerApps.outputs.registryName
+    serviceName: 'worker'
+    exists: workerExists
+    appRole: 'worker'
+    ingressEnabled: false
+    external: false
+    containerMinReplicas: 0
+    containerMaxReplicas: 2
+    targetPort: 50505
+    storageAccountName: storage.outputs.name
+    storageContainerName: storage.outputs.containerName
+    uipathMockMode: 'true'
+    uipathTenantName: uipathTenantName
+    uipathAppId: uipathAppId
+    uipathApiKey: uipathApiKey
+    uipathFolderId: uipathFolderId
+    uipathQueueName: uipathQueueName
+    entraClientId: ''
+    entraTenantId: tenant().tenantId
+    sharePointBaseUrl: sharePointBaseUrl
+    mfilesBaseUrl: mfilesBaseUrl
+    mfilesClientId: mfilesClientId
+    mfilesClientSecret: mfilesClientSecret
+    mfilesDefaultsAdminGroupIds: mfilesDefaultsAdminGroupIds
+    dataFabricApiUrl: dataFabricApiUrl
+    dataFabricApiKey: dataFabricApiKey
+    webhookBatchCompleteKey: webhookBatchCompleteKey
+    batchProgressPollingInterval: batchProgressPollingInterval
+    cosmosAccountEndpoint: cosmos.outputs.endpoint
+    cosmosDatabaseName: cosmos.outputs.databaseName
+    cosmosMetadataContainerName: cosmos.outputs.metadataContainerName
+    cosmosBatchReferenceContainerName: cosmos.outputs.batchReferenceContainerName
+    metadataStoreMode: metadataStoreMode
+    metadataReadFallback: metadataReadFallback
+    azureOpenAiEndpoint: azureOpenAiEndpoint
+    azureOpenAiExtractionDeployment: azureOpenAiExtractionDeployment
+    azureOpenAiApiKey: azureOpenAiApiKey
+    extractionQueueName: storage.outputs.queueName
+    extractionRenderDpi: extractionRenderDpi
+    extractionWorkerConcurrency: extractionWorkerConcurrency
+    applicationInsightsConnectionString: applicationInsights.outputs.connectionString
+    queueScaleEnabled: true
+    queueScaleRuleName: extractionQueueName
+    queueScaleQueueName: storage.outputs.queueName
+    queueScaleQueueLength: '1'
+    queueScaleAccountName: storage.outputs.name
+    queueScaleConnectionString: storageQueueConnectionString
   }
 }
 
@@ -208,12 +316,30 @@ module storageRoleAssignment 'core/storage/storage-role-assignment.bicep' = {
   }
 }
 
+module workerStorageRoleAssignment 'core/storage/storage-role-assignment.bicep' = {
+  name: 'worker-storage-role-assignment'
+  scope: resourceGroup
+  params: {
+    storageAccountName: storage.outputs.name
+    principalId: worker.outputs.identityPrincipalId
+  }
+}
+
 module cosmosRoleAssignment 'core/data/cosmos-role-assignment.bicep' = {
   name: 'cosmos-role-assignment'
   scope: resourceGroup
   params: {
     cosmosAccountName: cosmos.outputs.name
     principalId: aca.outputs.identityPrincipalId
+  }
+}
+
+module workerCosmosRoleAssignment 'core/data/cosmos-role-assignment.bicep' = {
+  name: 'worker-cosmos-role-assignment'
+  scope: resourceGroup
+  params: {
+    cosmosAccountName: cosmos.outputs.name
+    principalId: worker.outputs.identityPrincipalId
   }
 }
 
@@ -254,6 +380,10 @@ output SERVICE_ACA_IDENTITY_PRINCIPAL_ID string = aca.outputs.identityPrincipalI
 output SERVICE_ACA_NAME string = aca.outputs.name
 output SERVICE_ACA_URI string = aca.outputs.uri
 output SERVICE_ACA_IMAGE_NAME string = aca.outputs.imageName
+output SERVICE_WORKER_IDENTITY_PRINCIPAL_ID string = worker.outputs.identityPrincipalId
+output SERVICE_WORKER_NAME string = worker.outputs.name
+output SERVICE_WORKER_URI string = worker.outputs.uri
+output SERVICE_WORKER_IMAGE_NAME string = worker.outputs.imageName
 
 output AZURE_CONTAINER_ENVIRONMENT_NAME string = containerApps.outputs.environmentName
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerApps.outputs.registryLoginServer
@@ -262,6 +392,7 @@ output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.outputs.name
 output AZURE_STORAGE_ACCOUNT_ID string = storage.outputs.id
 output AZURE_STORAGE_CONTAINER_NAME string = storage.outputs.containerName
+output EXTRACTION_QUEUE_NAME string = storage.outputs.queueName
 output AZURE_COSMOS_ACCOUNT_NAME string = cosmos.outputs.name
 output AZURE_COSMOS_ACCOUNT_ENDPOINT string = cosmos.outputs.endpoint
 output COSMOS_ACCOUNT_ENDPOINT string = cosmos.outputs.endpoint
@@ -270,6 +401,9 @@ output COSMOS_METADATA_CONTAINER_NAME string = cosmos.outputs.metadataContainerN
 output COSMOS_BATCH_REFERENCE_CONTAINER_NAME string = cosmos.outputs.batchReferenceContainerName
 output METADATA_STORE_MODE string = metadataStoreMode
 output METADATA_READ_FALLBACK string = metadataReadFallback
+output APPLICATIONINSIGHTS_NAME string = applicationInsights.outputs.name
+output AZURE_OPENAI_ENDPOINT string = azureOpenAiEndpoint
+output AZURE_OPENAI_EXTRACTION_DEPLOYMENT string = azureOpenAiExtractionDeployment
 
 // Outputs for SharePoint FilePicker configuration
 output ENTRA_CLIENT_ID string = registration.outputs.clientAppId

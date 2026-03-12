@@ -7,6 +7,12 @@ param containerAppsEnvironmentName string
 param containerRegistryName string
 param serviceName string = 'aca'
 param exists bool
+param appRole string = 'api'
+param ingressEnabled bool = true
+param external bool = true
+param containerMinReplicas int = 1
+param containerMaxReplicas int = 10
+param targetPort int = 50505
 
 // Environment variables for the backend
 param storageAccountName string = ''
@@ -45,6 +51,22 @@ param cosmosMetadataContainerName string = 'metadata'
 param cosmosBatchReferenceContainerName string = 'batch-reference-index'
 param metadataStoreMode string = 'blob'
 param metadataReadFallback string = 'true'
+param azureOpenAiEndpoint string = ''
+param azureOpenAiExtractionDeployment string = ''
+@secure()
+param azureOpenAiApiKey string = ''
+param extractionQueueName string = 'drawing-extraction'
+param extractionRenderDpi string = '300'
+param extractionWorkerConcurrency string = '2'
+@secure()
+param applicationInsightsConnectionString string = ''
+param queueScaleEnabled bool = false
+param queueScaleRuleName string = 'drawing-extraction'
+param queueScaleQueueName string = 'drawing-extraction'
+param queueScaleQueueLength string = '1'
+param queueScaleAccountName string = ''
+@secure()
+param queueScaleConnectionString string = ''
 
 @description('Custom domain hostname (optional)')
 param customHostName string = ''
@@ -62,6 +84,10 @@ var baseEnvVars = [
   {
     name: 'AZURE_CLIENT_ID'
     value: acaIdentity.properties.clientId
+  }
+  {
+    name: 'APP_ROLE'
+    value: appRole
   }
   {
     name: 'AZURE_STORAGE_ACCOUNT_NAME'
@@ -147,6 +173,26 @@ var baseEnvVars = [
     name: 'METADATA_READ_FALLBACK'
     value: metadataReadFallback
   }
+  {
+    name: 'AZURE_OPENAI_ENDPOINT'
+    value: azureOpenAiEndpoint
+  }
+  {
+    name: 'AZURE_OPENAI_EXTRACTION_DEPLOYMENT'
+    value: azureOpenAiExtractionDeployment
+  }
+  {
+    name: 'EXTRACTION_QUEUE_NAME'
+    value: extractionQueueName
+  }
+  {
+    name: 'EXTRACTION_RENDER_DPI'
+    value: extractionRenderDpi
+  }
+  {
+    name: 'EXTRACTION_WORKER_CONCURRENCY'
+    value: extractionWorkerConcurrency
+  }
 ]
 
 var uipathApiKeyEnvVar = !empty(uipathApiKey)
@@ -185,7 +231,33 @@ var webhookBatchCompleteKeyEnvVar = !empty(webhookBatchCompleteKey)
     ]
   : []
 
-var allEnvVars = concat(baseEnvVars, uipathApiKeyEnvVar, dataFabricApiKeyEnvVar, mfilesClientSecretEnvVar, webhookBatchCompleteKeyEnvVar)
+var applicationInsightsConnectionStringEnvVar = !empty(applicationInsightsConnectionString)
+  ? [
+      {
+        name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+        secretRef: 'applicationinsights-connection-string'
+      }
+    ]
+  : []
+
+var azureOpenAiApiKeyEnvVar = !empty(azureOpenAiApiKey)
+  ? [
+      {
+        name: 'AZURE_OPENAI_API_KEY'
+        secretRef: 'azure-openai-api-key'
+      }
+    ]
+  : []
+
+var allEnvVars = concat(
+  baseEnvVars,
+  uipathApiKeyEnvVar,
+  dataFabricApiKeyEnvVar,
+  mfilesClientSecretEnvVar,
+  webhookBatchCompleteKeyEnvVar,
+  applicationInsightsConnectionStringEnvVar,
+  azureOpenAiApiKeyEnvVar
+)
 
 // Build secrets array conditionally
 var baseSecrets = [
@@ -231,7 +303,65 @@ var webhookBatchCompleteKeySecret = !empty(webhookBatchCompleteKey)
     ]
   : []
 
-var allSecrets = concat(baseSecrets, uipathApiKeySecret, dataFabricApiKeySecret, mfilesClientSecretSecret, webhookBatchCompleteKeySecret)
+var applicationInsightsConnectionStringSecret = !empty(applicationInsightsConnectionString)
+  ? [
+      {
+        name: 'applicationinsights-connection-string'
+        value: applicationInsightsConnectionString
+      }
+    ]
+  : []
+
+var azureOpenAiApiKeySecret = !empty(azureOpenAiApiKey)
+  ? [
+      {
+        name: 'azure-openai-api-key'
+        value: azureOpenAiApiKey
+      }
+    ]
+  : []
+
+var queueScaleConnectionStringSecret = queueScaleEnabled && !empty(queueScaleConnectionString)
+  ? [
+      {
+        name: 'queue-scale-connection-string'
+        value: queueScaleConnectionString
+      }
+    ]
+  : []
+
+var allSecrets = concat(
+  baseSecrets,
+  uipathApiKeySecret,
+  dataFabricApiKeySecret,
+  mfilesClientSecretSecret,
+  webhookBatchCompleteKeySecret,
+  applicationInsightsConnectionStringSecret,
+  azureOpenAiApiKeySecret,
+  queueScaleConnectionStringSecret
+)
+
+var scaleRules = queueScaleEnabled
+  ? [
+      {
+        name: queueScaleRuleName
+        custom: {
+          type: 'azure-queue'
+          auth: [
+            {
+              secretRef: 'queue-scale-connection-string'
+              triggerParameter: 'connection'
+            }
+          ]
+          metadata: {
+            accountName: queueScaleAccountName
+            queueLength: queueScaleQueueLength
+            queueName: queueScaleQueueName
+          }
+        }
+      }
+    ]
+  : []
 
 module app 'core/host/container-app-upsert.bicep' = {
   name: '${serviceName}-container-app-module'
@@ -243,8 +373,13 @@ module app 'core/host/container-app-upsert.bicep' = {
     exists: exists
     containerAppsEnvironmentName: containerAppsEnvironmentName
     containerRegistryName: containerRegistryName
+    containerMinReplicas: containerMinReplicas
+    containerMaxReplicas: containerMaxReplicas
     env: allEnvVars
-    targetPort: 50505
+    scaleRules: scaleRules
+    external: external
+    ingressEnabled: ingressEnabled
+    targetPort: targetPort
     secrets: allSecrets
     customHostName: customHostName
     customCertificateName: customCertificateName
