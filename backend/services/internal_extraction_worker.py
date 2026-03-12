@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from datetime import UTC, datetime
 from typing import Dict, List
 
 from entity_store_transformation_client.models.tender_process_status import (
@@ -79,6 +80,7 @@ class InternalExtractionWorker:
             {
                 'status': 'running',
                 'last_error': '',
+                'completed_at': '',
                 'submission_owner': '',
                 'submission_locked_until': '',
             },
@@ -103,6 +105,9 @@ class InternalExtractionWorker:
             payload.batch_id,
             {
                 'status': final_status,
+                'completed_at': datetime.now(UTC).replace(tzinfo=None).isoformat()
+                if final_status in {'completed', 'failed'}
+                else '',
                 'submission_owner': '',
                 'submission_locked_until': '',
                 'last_error': ''

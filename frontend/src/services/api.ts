@@ -8,8 +8,8 @@ import {
     TitleBlockCoords,
     Batch,
     BatchWithFiles,
+    BatchProgressResponse,
     BatchProgressSummaryResponse,
-    BatchStatusCounts,
     MFilesSearchField,
     MFilesDocumentClass,
     MFilesPropertyValue,
@@ -289,22 +289,8 @@ export const batchesApi = {
         return response.data.data;
     },
 
-    getProgress: async (tenderId: string, batchId: string): Promise<{
-        batch_id: string;
-        total_files: number;
-        status_counts: BatchStatusCounts;
-        files: Array<{
-            filename: string;
-            status: 'queued' | 'extracted' | 'failed' | 'exported';
-            drawing_number: string | null;
-            drawing_revision: string | null;
-            drawing_title: string | null;
-            destination_path: string | null;
-            created_at: string | null;
-            updated_at: string | null;
-        }>;
-    }> => {
-        const response = await api.get<ApiResponse<any>>(`/tenders/${tenderId}/batches/${batchId}/progress`);
+    getProgress: async (tenderId: string, batchId: string): Promise<BatchProgressResponse> => {
+        const response = await api.get<ApiResponse<BatchProgressResponse>>(`/tenders/${tenderId}/batches/${batchId}/progress`);
         if (!response.data.success || !response.data.data) {
             throw new Error(response.data.error || 'Failed to fetch batch progress');
         }

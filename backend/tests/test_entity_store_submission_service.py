@@ -35,6 +35,18 @@ class FakeMetadataStore:
             'tender_id': 'tender-1',
             'batch': {
                 'batch_id': 'batch-1',
+                'status': 'running',
+                'submitted_at': '2026-03-12T10:00:00',
+                'submission_attempts': [
+                    {
+                        'timestamp': '2026-03-12T10:00:00',
+                        'started_at': '2026-03-12T10:00:00',
+                        'completed_at': '2026-03-12T10:01:00',
+                        'duration_seconds': 60,
+                        'status': 'success',
+                    }
+                ],
+                'completed_at': '',
                 'uipath_reference': 'batch-batch-1',
             },
         }
@@ -129,6 +141,10 @@ class EntityStoreSubmissionServiceTests(unittest.TestCase):
         self.assertEqual(progress['status_counts']['extracted'], 1)
         self.assertEqual(progress['status_counts']['queued'], 0)
         self.assertEqual(progress['files'][0]['drawing_number'], 'A-101')
+        self.assertEqual(progress['metrics']['submission']['duration_seconds'], 60)
+        self.assertEqual(progress['metrics']['submission']['source'], 'exact')
+        self.assertEqual(progress['metrics']['extraction']['source'], 'estimated')
+        self.assertEqual(progress['metrics']['throughput']['processed_files'], 1)
 
 
 if __name__ == '__main__':

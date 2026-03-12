@@ -18,6 +18,10 @@ from flask_cors import CORS
 from werkzeug.datastructures import FileStorage
 import requests
 
+from services.batch_metrics import (
+    build_batch_metrics,
+    close_active_submission_attempt,
+)
 from services.blob_storage import BlobStorageService, sanitize_metadata_value
 from services.entity_store_submission_service import EntityStoreSubmissionService
 from services.extraction_queue import ExtractionBatchMessage, ExtractionQueueService
@@ -928,15 +932,18 @@ def _mark_batch_submission_failed(tender_id: str, batch_id: str, error: object,
     compact_error = _compact_batch_error(error, prefix=prefix)
     try:
         batch = metadata_store.get_batch(tender_id, batch_id)
-        attempts = batch.get('submission_attempts', []) if batch else []
-        if attempts and attempts[-1].get('status') == 'in_progress':
-            attempts[-1]['status'] = 'failed'
-            attempts[-1]['error'] = compact_error
+        attempts = close_active_submission_attempt(
+            batch.get('submission_attempts', []) if batch else [],
+            completed_at=datetime.utcnow(),
+            status='failed',
+            error=compact_error,
+        )
 
         updated = metadata_store.update_batch(tender_id, batch_id, {
             'status': 'failed',
             'submission_attempts': attempts,
             'last_error': compact_error,
+            'completed_at': '',
             'submission_owner': '',
             'submission_locked_until': ''
         })
@@ -1712,9 +1719,12 @@ def _process_uipath_submission_async(
             context.reference,
         )
 
-        if attempts and attempts[-1].get('status') == 'in_progress':
-            attempts[-1]['status'] = 'success'
-            attempts[-1]['reference'] = context.reference
+        attempts = close_active_submission_attempt(
+            attempts,
+            completed_at=datetime.utcnow(),
+            status='success',
+            reference=context.reference,
+        )
 
         updated = metadata_store.update_batch(tender_id, batch_id, {
             'status': 'running',
@@ -1723,6 +1733,7 @@ def _process_uipath_submission_async(
             'uipath_project_id': context.project_id,
             'submission_attempts': attempts,
             'last_error': '',
+            'completed_at': '',
             'submission_owner': '',
             'submission_locked_until': ''
         })
@@ -1804,6 +1815,7 @@ def retry_stuck_batches():
                                 metadata_store.update_batch(tender_id, batch_id, {
                                     'status': 'failed',
                                     'last_error': f'Maximum retry limit reached after {len(failed_attempts)} failed attempts',
+                                    'completed_at': '',
                                     'submission_owner': '',
                                     'submission_locked_until': ''
                                 })
@@ -3078,20 +3090,24 @@ def get_batch_progress(tender_id: str, batch_id: str):
 
         if not reference:
             file_count = int(batch.get('file_count', 0))
+            progress = {
+                'total_files': file_count,
+                'status_counts': {
+                    'queued': file_count,
+                    'extracted': 0,
+                    'failed': 0,
+                    'exported': 0
+                },
+                'files': []
+            }
+            progress['metrics'] = build_batch_metrics(batch, progress)
             logger.info(
                 f"Batch {batch_id} not yet queued for extraction. Returning default progress.")
             return jsonify({
                 'success': True,
                 'data': {
                     'batch_id': batch_id,
-                    'total_files': file_count,
-                    'status_counts': {
-                        'queued': file_count,
-                        'extracted': 0,
-                        'failed': 0,
-                        'exported': 0
-                    },
-                    'files': []
+                    **progress,
                 }
             })
 
@@ -3191,7 +3207,21 @@ def batch_complete_webhook():
 
         logger.info(
             f"Found batch {batch_id} in tender {tender_id} for reference {reference}")
-        metadata_store.update_batch_status(tender_id, batch_id, webhook_status)
+        if completed_at and not _parse_iso_datetime(completed_at):
+            return jsonify({
+                'success': False,
+                'error': 'completed_at must be an ISO-8601 datetime'
+            }), 400
+
+        updates = {
+            'status': webhook_status,
+            'submission_owner': '',
+            'submission_locked_until': '',
+        }
+        if completed_at:
+            updates['completed_at'] = completed_at
+
+        metadata_store.update_batch(tender_id, batch_id, updates)
         logger.info(
             f"Updated batch {batch_id} status to {webhook_status}")
 
@@ -3255,7 +3285,8 @@ def purge_old_batches():
 
                                 metadata_store.update_batch(tender_id, batch_id, {
                                     'status': 'failed',
-                                    'last_error': f'Manually purged: Legacy batch older than {age_hours} hours with no submission tracking'
+                                    'last_error': f'Manually purged: Legacy batch older than {age_hours} hours with no submission tracking',
+                                    'completed_at': '',
                                 })
 
                                 purged_count += 1

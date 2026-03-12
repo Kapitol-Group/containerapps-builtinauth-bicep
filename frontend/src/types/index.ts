@@ -177,11 +177,16 @@ export interface Batch {
     // Enhanced tracking fields for retry/failure handling
     submission_attempts?: Array<{
         timestamp: string;
+        started_at?: string;
+        completed_at?: string;
+        duration_seconds?: number;
         status: string;
+        source?: string;
         reference?: string;
         error?: string;
     }>;
     last_error?: string;
+    completed_at?: string;
     uipath_reference?: string;
     uipath_submission_id?: string;
     uipath_project_id?: string;
@@ -197,6 +202,59 @@ export interface BatchStatusCounts {
     extracted: number;
     failed: number;
     exported: number;
+}
+
+export type BatchMetricSource = 'exact' | 'estimated' | 'unavailable';
+
+export interface BatchProgressFile {
+    filename: string;
+    status: 'queued' | 'extracted' | 'failed' | 'exported';
+    drawing_number: string | null;
+    drawing_revision: string | null;
+    drawing_title: string | null;
+    destination_path: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+}
+
+export interface BatchSubmissionMetric {
+    duration_seconds: number | null;
+    attempt_count: number;
+    source: BatchMetricSource;
+}
+
+export interface BatchDurationMetric {
+    started_at: string | null;
+    ended_at: string | null;
+    duration_seconds: number | null;
+    source: BatchMetricSource;
+}
+
+export interface BatchCompletionMetric {
+    completed_at: string | null;
+    source: BatchMetricSource;
+}
+
+export interface BatchThroughputMetric {
+    processed_files: number;
+    files_per_minute: number | null;
+    source: BatchMetricSource;
+}
+
+export interface BatchProgressMetrics {
+    submission: BatchSubmissionMetric;
+    extraction: BatchDurationMetric;
+    completion: BatchCompletionMetric;
+    total: BatchDurationMetric;
+    throughput: BatchThroughputMetric;
+}
+
+export interface BatchProgressResponse {
+    batch_id: string;
+    total_files: number;
+    status_counts: BatchStatusCounts;
+    files: BatchProgressFile[];
+    metrics: BatchProgressMetrics;
 }
 
 export interface BatchProgressSummary {

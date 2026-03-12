@@ -1,5 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Batch, TenderFile } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+    Batch,
+    BatchMetricSource,
+    BatchProgressResponse,
+    BatchStatusCounts,
+    TenderFile,
+} from '../types';
 import { batchesApi } from '../services/api';
 import FileBrowser from './FileBrowser';
 import './BatchViewer.css';
@@ -16,16 +22,52 @@ interface BatchViewerProps {
     onDelete?: () => void;
 }
 
-interface FileProgress {
-    filename: string;
-    status: 'queued' | 'extracted' | 'failed' | 'exported';
-    drawing_number: string | null;
-    drawing_revision: string | null;
-    drawing_title: string | null;
-    destination_path: string | null;
-    created_at: string | null;
-    updated_at: string | null;
-}
+const EMPTY_STATUS_COUNTS: BatchStatusCounts = {
+    queued: 0,
+    extracted: 0,
+    failed: 0,
+    exported: 0,
+};
+
+const formatDate = (dateString?: string | null) => {
+    if (!dateString) {
+        return '-';
+    }
+
+    try {
+        return new Date(dateString).toLocaleString();
+    } catch {
+        return dateString;
+    }
+};
+
+const formatDuration = (durationSeconds?: number | null) => {
+    if (durationSeconds === null || durationSeconds === undefined) {
+        return '-';
+    }
+
+    const seconds = Math.max(0, Math.round(durationSeconds));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const remainingSeconds = seconds % 60;
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m`;
+    }
+    if (minutes > 0) {
+        return `${minutes}m ${remainingSeconds}s`;
+    }
+    return `${remainingSeconds}s`;
+};
+
+const formatThroughput = (filesPerMinute?: number | null) => {
+    if (filesPerMinute === null || filesPerMinute === undefined) {
+        return '-';
+    }
+    return `${filesPerMinute.toFixed(1)} files/min`;
+};
+
+const isEstimatedMetric = (source?: BatchMetricSource) => source === 'estimated';
 
 const BatchViewer: React.FC<BatchViewerProps> = ({
     batch,
@@ -40,54 +82,69 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
 }) => {
     const [selectedFile, setSelectedFile] = useState<TenderFile | null>(null);
     const [retrying, setRetrying] = useState(false);
-    const [fileProgress, setFileProgress] = useState<FileProgress[]>([]);
+    const [deleting, setDeleting] = useState(false);
+    const [progressData, setProgressData] = useState<BatchProgressResponse | null>(null);
     const [loadingProgress, setLoadingProgress] = useState(false);
     const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    
-    // Get polling interval from environment or default to 30 seconds
+
     const pollingInterval = parseInt(
         (window as any).BATCH_PROGRESS_POLLING_INTERVAL || '30000',
         10
     );
 
-    // Load and poll file progress for running batches
     useEffect(() => {
-        const loadProgress = async () => {
-            if (!batch.uipath_reference) {
-                // Batch not yet submitted to UiPath
-                return;
-            }
+        let isCancelled = false;
 
-            try {
-                setLoadingProgress(true);
-                const progress = await batchesApi.getProgress(tenderId, batch.batch_id);
-                setFileProgress(progress.files);
-            } catch (error: any) {
-                console.error('Failed to load batch progress:', error);
-                if (onError) {
-                    onError('Failed to load batch progress');
-                }
-            } finally {
-                setLoadingProgress(false);
-            }
-        };
-
-        // Initial load
-        loadProgress();
-
-        // Poll if batch is running
-        if (batch.status === 'running') {
-            pollingIntervalRef.current = setInterval(loadProgress, pollingInterval);
-        }
-
-        // Cleanup
-        return () => {
+        const stopPolling = () => {
             if (pollingIntervalRef.current) {
                 clearInterval(pollingIntervalRef.current);
                 pollingIntervalRef.current = null;
             }
         };
-    }, [batch.batch_id, batch.status, batch.uipath_reference, tenderId, pollingInterval, onError]);
+
+        const loadProgress = async () => {
+            try {
+                setLoadingProgress(true);
+                const progress = await batchesApi.getProgress(tenderId, batch.batch_id);
+                if (isCancelled) {
+                    return;
+                }
+
+                setProgressData(progress);
+
+                const hasExactCompletion = Boolean(progress.metrics?.completion?.completed_at);
+                const allFilesFinished = (
+                    progress.total_files > 0
+                    && progress.status_counts.queued === 0
+                    && progress.status_counts.extracted === 0
+                );
+                if (hasExactCompletion || allFilesFinished) {
+                    stopPolling();
+                }
+            } catch (error: any) {
+                if (isCancelled) {
+                    return;
+                }
+                console.error('Failed to load batch progress:', error);
+                onError?.('Failed to load batch progress');
+            } finally {
+                if (!isCancelled) {
+                    setLoadingProgress(false);
+                }
+            }
+        };
+
+        loadProgress();
+
+        if (batch.status === 'running' || batch.status === 'submitting') {
+            pollingIntervalRef.current = setInterval(loadProgress, pollingInterval);
+        }
+
+        return () => {
+            isCancelled = true;
+            stopPolling();
+        };
+    }, [batch.batch_id, batch.status, tenderId, pollingInterval, onError]);
 
     const handleFileSelect = (file: TenderFile) => {
         setSelectedFile(file);
@@ -102,21 +159,15 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         setRetrying(true);
         try {
             await batchesApi.retry(tenderId, batch.batch_id);
-            if (onRetry) {
-                onRetry();
-            }
-            onClose(); // Return to batch list
+            onRetry?.();
+            onClose();
         } catch (error: any) {
             console.error('Error retrying batch:', error);
-            if (onError) {
-                onError(error.message || 'Failed to retry batch. Please try again.');
-            }
+            onError?.(error.message || 'Failed to retry batch. Please try again.');
         } finally {
             setRetrying(false);
         }
     };
-
-    const [deleting, setDeleting] = useState(false);
 
     const handleDelete = async () => {
         if (!confirm(`Are you sure you want to delete batch "${batch.batch_name}"? The batch record will be removed and its files will become uncategorized.`)) {
@@ -126,14 +177,10 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         setDeleting(true);
         try {
             await batchesApi.delete(tenderId, batch.batch_id);
-            if (onDelete) {
-                onDelete();
-            }
+            onDelete?.();
         } catch (error: any) {
             console.error('Error deleting batch:', error);
-            if (onError) {
-                onError(error.message || 'Failed to delete batch. Please try again.');
-            }
+            onError?.(error.message || 'Failed to delete batch. Please try again.');
         } finally {
             setDeleting(false);
         }
@@ -169,15 +216,6 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         }
     };
 
-    const formatDate = (dateString: string) => {
-        try {
-            const date = new Date(dateString);
-            return date.toLocaleString();
-        } catch {
-            return dateString;
-        }
-    };
-
     const getStatusBadgeClass = (status: string) => {
         switch (status) {
             case 'pending':
@@ -195,6 +233,20 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
         }
     };
 
+    const renderMetricBadge = (source?: BatchMetricSource) => {
+        if (!isEstimatedMetric(source)) {
+            return null;
+        }
+
+        return <span className="metric-badge">Estimated</span>;
+    };
+
+    const statusCounts = progressData?.status_counts || {
+        ...EMPTY_STATUS_COUNTS,
+        queued: batch.file_count,
+    };
+    const fileProgress = progressData?.files || [];
+    const metrics = progressData?.metrics;
     const canRetry = batch.status === 'failed';
 
     if (loading) {
@@ -237,7 +289,7 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                             </span>
                         )}
                         <span className="metadata-item coords-item">
-                            <strong>Title Block:</strong> X:{batch.title_block_coords.x} Y:{batch.title_block_coords.y} 
+                            <strong>Title Block:</strong> X:{batch.title_block_coords.x} Y:{batch.title_block_coords.y}
                             {' '}W:{batch.title_block_coords.width} H:{batch.title_block_coords.height}
                         </span>
                     </div>
@@ -253,7 +305,82 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                 </div>
             </div>
 
-            {/* Display submission attempts history if available */}
+            <div className="batch-metrics-section">
+                <div className="section-header">
+                    <h3>Batch Metrics</h3>
+                    {loadingProgress && <p className="loading-indicator">Updating...</p>}
+                </div>
+                <div className="metrics-grid">
+                    <div className="metric-card">
+                        <div className="metric-card-header">
+                            <span className="metric-title">Submission</span>
+                            {renderMetricBadge(metrics?.submission.source)}
+                        </div>
+                        <div className="metric-value">{formatDuration(metrics?.submission.duration_seconds)}</div>
+                        <div className="metric-meta">
+                            {metrics?.submission.attempt_count
+                                ? `${metrics.submission.attempt_count} attempt${metrics.submission.attempt_count === 1 ? '' : 's'}`
+                                : 'No attempts recorded'}
+                        </div>
+                    </div>
+
+                    <div className="metric-card">
+                        <div className="metric-card-header">
+                            <span className="metric-title">Extraction</span>
+                            {renderMetricBadge(metrics?.extraction.source)}
+                        </div>
+                        <div className="metric-value">{formatDuration(metrics?.extraction.duration_seconds)}</div>
+                        <div className="metric-meta">
+                            {metrics?.extraction.started_at
+                                ? `Started ${formatDate(metrics.extraction.started_at)}`
+                                : 'No extraction timing yet'}
+                        </div>
+                    </div>
+
+                    <div className="metric-card">
+                        <div className="metric-card-header">
+                            <span className="metric-title">Completed</span>
+                            {renderMetricBadge(metrics?.completion.source)}
+                        </div>
+                        <div className="metric-value">{formatDate(metrics?.completion.completed_at)}</div>
+                        <div className="metric-meta">
+                            {metrics?.completion.completed_at ? 'Terminal batch time' : 'Not completed yet'}
+                        </div>
+                    </div>
+
+                    <div className="metric-card">
+                        <div className="metric-card-header">
+                            <span className="metric-title">Total</span>
+                            {renderMetricBadge(metrics?.total.source)}
+                        </div>
+                        <div className="metric-value">{formatDuration(metrics?.total.duration_seconds)}</div>
+                        <div className="metric-meta">
+                            {metrics?.total.ended_at
+                                ? `Last update ${formatDate(metrics.total.ended_at)}`
+                                : 'Elapsed total unavailable'}
+                        </div>
+                    </div>
+
+                    <div className="metric-card">
+                        <div className="metric-card-header">
+                            <span className="metric-title">Throughput</span>
+                            {renderMetricBadge(metrics?.throughput.source)}
+                        </div>
+                        <div className="metric-value">{formatThroughput(metrics?.throughput.files_per_minute)}</div>
+                        <div className="metric-meta">
+                            {metrics ? `${metrics.throughput.processed_files} processed` : 'No throughput yet'}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="status-strip">
+                    <div className="status-chip status-chip-queued">Queued {statusCounts.queued}</div>
+                    <div className="status-chip status-chip-extracted">Extracted {statusCounts.extracted}</div>
+                    <div className="status-chip status-chip-failed">Failed {statusCounts.failed}</div>
+                    <div className="status-chip status-chip-exported">Exported {statusCounts.exported}</div>
+                </div>
+            </div>
+
             {batch.submission_attempts && batch.submission_attempts.length > 0 && (
                 <div className="submission-history">
                     <h3>Submission Attempts</h3>
@@ -261,16 +388,19 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                         {batch.submission_attempts.map((attempt, index) => (
                             <div key={index} className={`attempt-item attempt-${attempt.status}`}>
                                 <span className="attempt-number">#{index + 1}</span>
-                                <span className="attempt-time">{formatDate(attempt.timestamp)}</span>
+                                <span className="attempt-time">{formatDate(attempt.started_at || attempt.timestamp)}</span>
                                 <span className={`attempt-status status-${attempt.status}`}>
                                     {attempt.status}
                                 </span>
+                                {attempt.duration_seconds !== undefined && (
+                                    <span className="attempt-duration">{formatDuration(attempt.duration_seconds)}</span>
+                                )}
                                 {attempt.reference && (
                                     <span className="attempt-reference">Ref: {attempt.reference}</span>
                                 )}
                                 {attempt.error && (
                                     <span className="attempt-error" title={attempt.error}>
-                                        ⚠️ {attempt.error.substring(0, 50)}{attempt.error.length > 50 ? '...' : ''}
+                                        ⚠️ {attempt.error.substring(0, 80)}{attempt.error.length > 80 ? '...' : ''}
                                     </span>
                                 )}
                             </div>
@@ -279,7 +409,6 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                 </div>
             )}
 
-            {/* Display last error if available */}
             {batch.last_error && (
                 <div className="last-error-box">
                     <h4>⚠️ Last Error</h4>
@@ -287,11 +416,9 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                 </div>
             )}
 
-            {/* File-level progress display */}
             {fileProgress.length > 0 && (
                 <div className="file-progress-section">
                     <h3>File Processing Status</h3>
-                    {loadingProgress && <p className="loading-indicator">Updating...</p>}
                     <div className="file-progress-table">
                         <table>
                             <thead>
@@ -333,8 +460,8 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                     selectedFile={selectedFile}
                     selectedFiles={[]}
                     onFileSelect={handleFileSelect}
-                    onSelectionChange={() => {}} // No multi-selection in read-only mode
-                    onFileDelete={undefined} // No deletion in read-only mode
+                    onSelectionChange={() => {}}
+                    onFileDelete={undefined}
                     loading={false}
                     readOnly={true}
                 />

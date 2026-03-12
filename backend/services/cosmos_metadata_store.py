@@ -13,6 +13,10 @@ from azure.cosmos import CosmosClient, PartitionKey, exceptions
 from azure.core import MatchConditions
 from azure.identity import DefaultAzureCredential
 
+from services.batch_metrics import (
+    normalize_submission_attempts,
+    start_submission_attempt,
+)
 from services.metadata_store import MetadataStore
 
 logger = logging.getLogger(__name__)
@@ -207,6 +211,9 @@ class CosmosMetadataStore(MetadataStore):
         mfiles_properties = doc.get('mfiles_properties', [])
         if not isinstance(mfiles_properties, list):
             mfiles_properties = []
+        submission_attempts = normalize_submission_attempts(
+            doc.get('submission_attempts', [])
+        )
         return {
             'batch_id': batch_id,
             'batch_name': doc.get('batch_name'),
@@ -220,8 +227,9 @@ class CosmosMetadataStore(MetadataStore):
             'submitted_by': doc.get('submitted_by'),
             'file_count': int(doc.get('file_count', 0)),
             'job_id': doc.get('job_id', ''),
-            'submission_attempts': doc.get('submission_attempts', []),
+            'submission_attempts': submission_attempts,
             'last_error': doc.get('last_error', ''),
+            'completed_at': doc.get('completed_at', ''),
             'uipath_reference': doc.get('uipath_reference', ''),
             'uipath_submission_id': doc.get('uipath_submission_id', ''),
             'uipath_project_id': doc.get('uipath_project_id', ''),
@@ -714,6 +722,7 @@ class CosmosMetadataStore(MetadataStore):
             'job_id': job_id or '',
             'submission_attempts': [],
             'last_error': '',
+            'completed_at': '',
             'uipath_reference': '',
             'uipath_submission_id': '',
             'uipath_project_id': '',
@@ -747,8 +756,11 @@ class CosmosMetadataStore(MetadataStore):
             'submitted_by': batch_record.get('submitted_by', existing_doc.get('submitted_by')),
             'file_count': int(batch_record.get('file_count', existing_doc.get('file_count', 0))),
             'job_id': batch_record.get('job_id', existing_doc.get('job_id', '')),
-            'submission_attempts': batch_record.get('submission_attempts', existing_doc.get('submission_attempts', [])),
+            'submission_attempts': normalize_submission_attempts(
+                batch_record.get('submission_attempts', existing_doc.get('submission_attempts', []))
+            ),
             'last_error': batch_record.get('last_error', existing_doc.get('last_error', '')),
+            'completed_at': batch_record.get('completed_at', existing_doc.get('completed_at', '')),
             'uipath_reference': batch_record.get('uipath_reference', existing_doc.get('uipath_reference', '')),
             'uipath_submission_id': batch_record.get('uipath_submission_id', existing_doc.get('uipath_submission_id', '')),
             'uipath_project_id': batch_record.get('uipath_project_id', existing_doc.get('uipath_project_id', '')),
@@ -837,6 +849,8 @@ class CosmosMetadataStore(MetadataStore):
                 doc[key] = []
             elif key in {'title_block_coords'} and value is None:
                 doc[key] = {}
+            elif key in {'submission_attempts'}:
+                doc[key] = normalize_submission_attempts(value)
             elif key in {'file_count'} and value is not None:
                 doc[key] = int(value)
             elif value is None:
@@ -886,14 +900,11 @@ class CosmosMetadataStore(MetadataStore):
             if not can_claim:
                 return None
 
-            submission_attempts = doc.get('submission_attempts')
-            if not isinstance(submission_attempts, list):
-                submission_attempts = []
-            submission_attempts.append({
-                'timestamp': now.isoformat(),
-                'status': 'in_progress',
-                'source': attempt_source or 'unknown'
-            })
+            submission_attempts = start_submission_attempt(
+                doc.get('submission_attempts'),
+                started_at=now,
+                source=attempt_source or 'unknown',
+            )
 
             doc['status'] = 'submitting'
             doc['submission_owner'] = owner
@@ -901,6 +912,7 @@ class CosmosMetadataStore(MetadataStore):
             doc['submission_attempts'] = submission_attempts
             doc['updated_at'] = now.isoformat()
             doc['last_error'] = ''
+            doc['completed_at'] = ''
             if submitted_by:
                 doc['submitted_by'] = submitted_by
 

@@ -241,6 +241,7 @@ class InternalExtractionWorkerTests(unittest.TestCase):
         self.assertEqual(tender_file.status, TenderProcessStatus.EXTRACTED)
         self.assertEqual(worker.vision_extractor.calls, 1)
         self.assertEqual(metadata_store.batch['status'], 'completed')
+        self.assertTrue(metadata_store.batch.get('completed_at'))
         self.assertEqual(len(blob_service.uploads), 2)
         self.assertEqual(len(queue_service.deleted_messages), 2)
 
@@ -264,6 +265,7 @@ class InternalExtractionWorkerTests(unittest.TestCase):
 
         self.assertEqual(tender_file.status, TenderProcessStatus.FAILED)
         self.assertEqual(metadata_store.batch['status'], 'failed')
+        self.assertTrue(metadata_store.batch.get('completed_at'))
         self.assertEqual(metadata_store.batch['last_error'], 'transient openai outage')
         self.assertEqual(len(queue_service.deleted_messages), 1)
 

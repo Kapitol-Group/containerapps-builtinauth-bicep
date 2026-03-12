@@ -16,6 +16,11 @@ from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import ResourceNotFoundError
 from werkzeug.datastructures import FileStorage
 
+from services.batch_metrics import (
+    normalize_submission_attempts as normalize_batch_submission_attempts,
+    start_submission_attempt,
+)
+
 logger = logging.getLogger(__name__)
 
 # Azure Blob metadata has strict header-size limits.
@@ -114,20 +119,32 @@ def _normalize_folder_list(folder_list: List) -> List[str]:
 
 def _normalize_submission_attempts(attempts: List) -> List[Dict]:
     """Keep a small, bounded submission history in metadata."""
-    if not isinstance(attempts, list):
-        return []
+    attempts = normalize_batch_submission_attempts(attempts)
 
     normalized = []
     for attempt in attempts[-MAX_BATCH_ATTEMPTS:]:
-        if not isinstance(attempt, dict):
-            continue
-
         normalized_attempt = {
             'timestamp': _truncate_text(
                 sanitize_metadata_value(str(attempt.get('timestamp', ''))), 64),
             'status': _truncate_text(
                 sanitize_metadata_value(str(attempt.get('status', ''))), 32)
         }
+
+        if attempt.get('started_at'):
+            normalized_attempt['started_at'] = _truncate_text(
+                sanitize_metadata_value(str(attempt.get('started_at'))), 64)
+
+        if attempt.get('completed_at'):
+            normalized_attempt['completed_at'] = _truncate_text(
+                sanitize_metadata_value(str(attempt.get('completed_at'))), 64)
+
+        if attempt.get('duration_seconds') is not None:
+            try:
+                normalized_attempt['duration_seconds'] = int(
+                    attempt.get('duration_seconds')
+                )
+            except (TypeError, ValueError):
+                pass
 
         if attempt.get('reference'):
             normalized_attempt['reference'] = _truncate_text(
@@ -138,6 +155,10 @@ def _normalize_submission_attempts(attempts: List) -> List[Dict]:
                 sanitize_metadata_value(str(attempt.get('error'))),
                 MAX_BATCH_ERROR_CHARS
             )
+
+        if attempt.get('source'):
+            normalized_attempt['source'] = _truncate_text(
+                sanitize_metadata_value(str(attempt.get('source'))), 64)
 
         normalized.append(normalized_attempt)
 
@@ -878,6 +899,7 @@ class BlobStorageService:
                 _normalize_submission_attempts(submission_attempts if isinstance(submission_attempts, list) else [])
             ),
             'last_error': sanitize_metadata_value(str(batch_record.get('last_error', ''))),
+            'completed_at': sanitize_metadata_value(str(batch_record.get('completed_at', ''))),
             'uipath_reference': sanitize_metadata_value(str(batch_record.get('uipath_reference', ''))),
             'uipath_submission_id': sanitize_metadata_value(str(batch_record.get('uipath_submission_id', ''))),
             'uipath_project_id': sanitize_metadata_value(str(batch_record.get('uipath_project_id', ''))),
@@ -911,6 +933,7 @@ class BlobStorageService:
             'job_id': batch_record.get('job_id', ''),
             'submission_attempts': submission_attempts,
             'last_error': batch_record.get('last_error', ''),
+            'completed_at': batch_record.get('completed_at', ''),
             'uipath_reference': batch_record.get('uipath_reference', ''),
             'uipath_submission_id': batch_record.get('uipath_submission_id', ''),
             'uipath_project_id': batch_record.get('uipath_project_id', ''),
@@ -971,6 +994,7 @@ class BlobStorageService:
             # New fields for enhanced tracking
             'submission_attempts': _json_dumps_compact([]),
             'last_error': '',
+            'completed_at': '',
             'uipath_reference': '',
             'uipath_submission_id': '',
             'uipath_project_id': '',
@@ -1009,6 +1033,7 @@ class BlobStorageService:
             'job_id': job_id,
             'submission_owner': '',
             'submission_locked_until': '',
+            'completed_at': '',
         }
 
     def list_batches(self, tender_id: str) -> List[Dict]:
@@ -1053,8 +1078,11 @@ class BlobStorageService:
                         'submitted_by': blob.metadata.get('submitted_by'),
                         'file_count': int(blob.metadata.get('file_count', 0)),
                         'job_id': blob.metadata.get('job_id', ''),
-                        'submission_attempts': json.loads(blob.metadata.get('submission_attempts', '[]')),
+                        'submission_attempts': _normalize_submission_attempts(
+                            json.loads(blob.metadata.get('submission_attempts', '[]'))
+                        ),
                         'last_error': blob.metadata.get('last_error', ''),
+                        'completed_at': blob.metadata.get('completed_at', ''),
                         'uipath_reference': blob.metadata.get('uipath_reference', ''),
                         'uipath_submission_id': blob.metadata.get('uipath_submission_id', ''),
                         'uipath_project_id': blob.metadata.get('uipath_project_id', ''),
@@ -1146,8 +1174,11 @@ class BlobStorageService:
                     'file_count': int(properties.metadata.get('file_count', 0)),
                     'job_id': properties.metadata.get('job_id', ''),
                     # Enhanced tracking fields
-                    'submission_attempts': json.loads(properties.metadata.get('submission_attempts', '[]')),
+                    'submission_attempts': _normalize_submission_attempts(
+                        json.loads(properties.metadata.get('submission_attempts', '[]'))
+                    ),
                     'last_error': properties.metadata.get('last_error', ''),
+                    'completed_at': properties.metadata.get('completed_at', ''),
                     'uipath_reference': properties.metadata.get('uipath_reference', ''),
                     'uipath_submission_id': properties.metadata.get('uipath_submission_id', ''),
                     'uipath_project_id': properties.metadata.get('uipath_project_id', ''),
@@ -1239,9 +1270,7 @@ class BlobStorageService:
 
             # Update with new values (sanitize strings, serialize objects)
             for key, value in updates.items():
-                if value is None:
-                    metadata[key] = ''
-                elif key == 'submission_attempts':
+                if key == 'submission_attempts':
                     metadata[key] = _json_dumps_compact(
                         _normalize_submission_attempts(value if isinstance(value, list) else [])
                     )
@@ -1258,6 +1287,8 @@ class BlobStorageService:
                         folders = []
                     metadata[key] = _json_dumps_compact(
                         _normalize_folder_list(folders))
+                elif value is None:
+                    metadata[key] = ''
                 elif key == 'last_error':
                     metadata[key] = _truncate_text(
                         sanitize_metadata_value(str(value)),
@@ -1332,11 +1363,11 @@ class BlobStorageService:
             except (TypeError, ValueError, json.JSONDecodeError):
                 submission_attempts = []
 
-            submission_attempts.append({
-                'timestamp': now.isoformat(),
-                'status': 'in_progress',
-                'source': attempt_source or 'unknown'
-            })
+            submission_attempts = start_submission_attempt(
+                submission_attempts,
+                started_at=now,
+                source=attempt_source or 'unknown',
+            )
 
             metadata['status'] = 'submitting'
             metadata['submission_owner'] = sanitize_metadata_value(owner)
@@ -1345,6 +1376,7 @@ class BlobStorageService:
                 _normalize_submission_attempts(submission_attempts)
             )
             metadata['last_error'] = ''
+            metadata['completed_at'] = ''
             if submitted_by:
                 metadata['submitted_by'] = sanitize_metadata_value(str(submitted_by))
 

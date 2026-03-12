@@ -10,6 +10,7 @@ from entity_store_transformation_client.models.tender_process_status import (
     TenderProcessStatus,
 )
 
+from services.batch_metrics import build_batch_metrics
 from services.metadata_store import MetadataStore
 
 logger = logging.getLogger(__name__)
@@ -396,8 +397,10 @@ class EntityStoreSubmissionService:
                 }
             )
 
-        return {
+        progress = {
             'total_files': len(file_details),
             'status_counts': status_counts,
             'files': file_details,
         }
+        progress['metrics'] = build_batch_metrics(batch, progress)
+        return progress
