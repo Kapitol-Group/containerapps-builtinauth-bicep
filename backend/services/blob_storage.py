@@ -552,6 +552,7 @@ class BlobStorageService:
                 continue
 
             files.append({
+                'id': blob.name,
                 'name': filename,
                 'path': blob.name,
                 'size': blob.size,
@@ -561,7 +562,18 @@ class BlobStorageService:
                 'uploaded_at': blob.metadata.get('uploaded_at') if blob.metadata else None,
                 'last_modified': blob.last_modified.isoformat() if blob.last_modified else None,
                 'source': blob.metadata.get('source', 'local') if blob.metadata else 'local',
-                'batch_id': blob.metadata.get('batch_id') if blob.metadata else None
+                'batch_id': blob.metadata.get('batch_id') if blob.metadata else None,
+                'updated_at': blob.metadata.get('updated_at') if blob.metadata else None,
+                'extraction_status': blob.metadata.get('extraction_status') if blob.metadata else None,
+                'provider': blob.metadata.get('provider') if blob.metadata else None,
+                'drawing_number': blob.metadata.get('drawing_number') if blob.metadata else None,
+                'drawing_revision': blob.metadata.get('drawing_revision') if blob.metadata else None,
+                'drawing_title': blob.metadata.get('drawing_title') if blob.metadata else None,
+                'transaction_id': blob.metadata.get('transaction_id') if blob.metadata else None,
+                'destination_path': blob.metadata.get('destination_path') if blob.metadata else None,
+                'last_error': blob.metadata.get('last_error') if blob.metadata else None,
+                'extracted_at': blob.metadata.get('extracted_at') if blob.metadata else None,
+                'extraction_reference': blob.metadata.get('extraction_reference') if blob.metadata else None,
             })
 
         return files
@@ -615,6 +627,35 @@ class BlobStorageService:
             'source': source,
             'last_modified': properties.last_modified.isoformat() if properties.last_modified else None,
             **file_metadata
+        }
+
+    def upload_bytes(
+        self,
+        blob_name: str,
+        payload: bytes,
+        *,
+        content_type: str = 'application/octet-stream',
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> Dict:
+        """Upload an in-memory payload to blob storage."""
+        if not self.container_client:
+            raise Exception("Blob storage not configured")
+
+        blob_client = self.container_client.get_blob_client(blob_name)
+        blob_client.upload_blob(
+            data=payload,
+            overwrite=True,
+            metadata=sanitize_metadata_dict(metadata or {}),
+            content_settings=ContentSettings(content_type=content_type),
+        )
+        properties = blob_client.get_blob_properties()
+        return {
+            'path': blob_name,
+            'size': properties.size,
+            'content_type': content_type,
+            'last_modified': properties.last_modified.isoformat()
+            if properties.last_modified
+            else None,
         }
 
     def stage_chunk(self, blob_name: str, chunk_index: int, data: bytes) -> str:
@@ -724,6 +765,7 @@ class BlobStorageService:
             filename = file_path.split('/')[-1]
 
             return {
+                'id': file_path,
                 'name': filename,
                 'path': file_path,
                 'size': properties.size,
@@ -734,7 +776,18 @@ class BlobStorageService:
                 'last_modified': properties.last_modified.isoformat() if properties.last_modified else None,
                 'source': properties.metadata.get('source', 'local') if properties.metadata else 'local',
                 'batch_id': properties.metadata.get('batch_id') if properties.metadata else None,
-                'submitted_at': properties.metadata.get('submitted_at') if properties.metadata else None
+                'submitted_at': properties.metadata.get('submitted_at') if properties.metadata else None,
+                'updated_at': properties.metadata.get('updated_at') if properties.metadata else None,
+                'extraction_status': properties.metadata.get('extraction_status') if properties.metadata else None,
+                'provider': properties.metadata.get('provider') if properties.metadata else None,
+                'drawing_number': properties.metadata.get('drawing_number') if properties.metadata else None,
+                'drawing_revision': properties.metadata.get('drawing_revision') if properties.metadata else None,
+                'drawing_title': properties.metadata.get('drawing_title') if properties.metadata else None,
+                'transaction_id': properties.metadata.get('transaction_id') if properties.metadata else None,
+                'destination_path': properties.metadata.get('destination_path') if properties.metadata else None,
+                'last_error': properties.metadata.get('last_error') if properties.metadata else None,
+                'extracted_at': properties.metadata.get('extracted_at') if properties.metadata else None,
+                'extraction_reference': properties.metadata.get('extraction_reference') if properties.metadata else None,
             }
         except Exception:
             return None
@@ -1435,6 +1488,19 @@ class BlobStorageService:
                         metadata.pop('submitted_at', None)
                         # Reset category to uncategorized
                         metadata['category'] = 'uncategorized'
+                        for key in [
+                            'extraction_status',
+                            'provider',
+                            'drawing_number',
+                            'drawing_revision',
+                            'drawing_title',
+                            'transaction_id',
+                            'destination_path',
+                            'last_error',
+                            'extracted_at',
+                            'extraction_reference',
+                        ]:
+                            metadata.pop(key, None)
                         file_blob.set_blob_metadata(metadata)
                         files_cleaned += 1
                 except Exception as file_err:

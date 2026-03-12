@@ -17,6 +17,9 @@
     "acaExists": {
       "value": "${SERVICE_ACA_RESOURCE_EXISTS=false}"
     },
+    "workerExists": {
+      "value": "${SERVICE_WORKER_RESOURCE_EXISTS=false}"
+    },
     "includeTokenStore": {
       "value": "${USE_ACA_TOKEN_STORE=false}"
     },
@@ -49,6 +52,24 @@
     },
     "webhookBatchCompleteKey": {
       "value": "${WEBHOOK_BATCH_COMPLETE_KEY}"
+    },
+    "azureOpenAiEndpoint": {
+      "value": "${AZURE_OPENAI_ENDPOINT}"
+    },
+    "azureOpenAiExtractionDeployment": {
+      "value": "${AZURE_OPENAI_EXTRACTION_DEPLOYMENT}"
+    },
+    "azureOpenAiApiKey": {
+      "value": "${AZURE_OPENAI_API_KEY}"
+    },
+    "extractionQueueName": {
+      "value": "${EXTRACTION_QUEUE_NAME=drawing-extraction}"
+    },
+    "extractionRenderDpi": {
+      "value": "${EXTRACTION_RENDER_DPI=300}"
+    },
+    "extractionWorkerConcurrency": {
+      "value": "${EXTRACTION_WORKER_CONCURRENCY=2}"
     },
     "uipathTenantName": {
       "value": "${UIPATH_TENANT_NAME}"

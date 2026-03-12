@@ -38,10 +38,11 @@ RUN pip3 install -r requirements.txt
 
 # Copy rest of backend code
 COPY backend/ .
+RUN chmod +x /code/entrypoint.sh
 
 # Copy built frontend from previous stage
 COPY --from=frontend-build /frontend/build ./frontend_build
 
 EXPOSE 50505
 
-ENTRYPOINT ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+ENTRYPOINT ["./entrypoint.sh"]
