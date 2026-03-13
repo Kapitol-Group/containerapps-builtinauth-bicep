@@ -18,19 +18,21 @@ class VisionExtractorHelpersTests(unittest.TestCase):
             TitleBlockExtractionSchema(
                 drawing_number="  A-101  ",
                 drawing_revision="   ",
+                revision_date=" 2026-03-12 ",
                 drawing_title="\nGround Floor Plan\t",
             )
         )
 
         self.assertEqual(normalized.drawing_number, "A-101")
         self.assertIsNone(normalized.drawing_revision)
+        self.assertEqual(normalized.revision_date, "2026-03-12")
         self.assertEqual(normalized.drawing_title, "Ground Floor Plan")
 
     def test_extraction_has_values_requires_at_least_one_non_empty_field(self) -> None:
         self.assertFalse(extraction_has_values(TitleBlockExtractionSchema()))
         self.assertTrue(
             extraction_has_values(
-                TitleBlockExtractionSchema(drawing_revision="B")
+                TitleBlockExtractionSchema(revision_date="2026-03-12")
             )
         )
 

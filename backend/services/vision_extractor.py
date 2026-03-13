@@ -35,6 +35,7 @@ class VisionExtractorError(RuntimeError):
 class TitleBlockExtractionSchema(BaseModel):
     drawing_number: Optional[str] = None
     drawing_revision: Optional[str] = None
+    revision_date: Optional[str] = None
     drawing_title: Optional[str] = None
 
     model_config = ConfigDict(extra='forbid')
@@ -62,6 +63,7 @@ def normalize_extraction(
     return TitleBlockExtractionSchema(
         drawing_number=normalize_optional_text(extraction.drawing_number),
         drawing_revision=normalize_optional_text(extraction.drawing_revision),
+        revision_date=normalize_optional_text(extraction.revision_date),
         drawing_title=normalize_optional_text(extraction.drawing_title),
     )
 
@@ -71,6 +73,7 @@ def extraction_has_values(extraction: TitleBlockExtractionSchema) -> bool:
         [
             extraction.drawing_number,
             extraction.drawing_revision,
+            extraction.revision_date,
             extraction.drawing_title,
         ]
     )
@@ -154,7 +157,7 @@ class VisionExtractor:
                     {
                         "type": "text",
                         "text": (
-                            "Extract drawing_number, drawing_revision, and drawing_title "
+                            "Extract drawing_number, drawing_revision, revision_date, and drawing_title "
                             f"from the title block for file '{filename}'. "
                             "Image 1 is the cropped title block. "
                             "Image 2 is the full page context."

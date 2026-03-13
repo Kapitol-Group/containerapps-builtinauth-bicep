@@ -211,6 +211,7 @@ export interface BatchProgressFile {
     status: 'queued' | 'extracted' | 'failed' | 'exported';
     drawing_number: string | null;
     drawing_revision: string | null;
+    revision_date: string | null;
     drawing_title: string | null;
     destination_path: string | null;
     created_at: string | null;

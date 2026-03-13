@@ -23,6 +23,7 @@ class FakeMetadataStore:
                 'provider': '',
                 'drawing_number': '',
                 'drawing_revision': '',
+                'revision_date': '',
                 'drawing_title': '',
                 'transaction_id': '',
                 'destination_path': '',
@@ -104,6 +105,7 @@ class EntityStoreSubmissionServiceTests(unittest.TestCase):
                 'extraction_status': 'extracted',
                 'drawing_number': 'A-101',
                 'drawing_revision': 'B',
+                'revision_date': '2026-03-12',
                 'drawing_title': 'Ground Floor Plan',
                 'extraction_reference': 'batch-old',
             }
@@ -120,6 +122,7 @@ class EntityStoreSubmissionServiceTests(unittest.TestCase):
         self.assertEqual(stored_file.status, TenderProcessStatus.QUEUED)
         self.assertIsNone(stored_file.drawing_number)
         self.assertIsNone(stored_file.drawing_revision)
+        self.assertIsNone(stored_file.revision_date)
         self.assertIsNone(stored_file.drawing_title)
 
     def test_get_batch_progress_aggregates_from_batch_files(self) -> None:
@@ -129,6 +132,7 @@ class EntityStoreSubmissionServiceTests(unittest.TestCase):
                 'provider': 'internal',
                 'drawing_number': 'A-101',
                 'drawing_revision': 'B',
+                'revision_date': '2026-03-12',
                 'drawing_title': 'Ground Floor Plan',
                 'extracted_at': '2026-03-12T10:06:00',
                 'extraction_reference': 'batch-batch-1',
@@ -141,6 +145,7 @@ class EntityStoreSubmissionServiceTests(unittest.TestCase):
         self.assertEqual(progress['status_counts']['extracted'], 1)
         self.assertEqual(progress['status_counts']['queued'], 0)
         self.assertEqual(progress['files'][0]['drawing_number'], 'A-101')
+        self.assertEqual(progress['files'][0]['revision_date'], '2026-03-12')
         self.assertEqual(progress['metrics']['submission']['duration_seconds'], 60)
         self.assertEqual(progress['metrics']['submission']['source'], 'exact')
         self.assertEqual(progress['metrics']['extraction']['source'], 'estimated')

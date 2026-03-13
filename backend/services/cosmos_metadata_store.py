@@ -174,6 +174,7 @@ class CosmosMetadataStore(MetadataStore):
             'provider': doc.get('provider'),
             'drawing_number': doc.get('drawing_number'),
             'drawing_revision': doc.get('drawing_revision'),
+            'revision_date': doc.get('revision_date'),
             'drawing_title': doc.get('drawing_title'),
             'transaction_id': doc.get('transaction_id'),
             'destination_path': doc.get('destination_path'),
@@ -586,6 +587,7 @@ class CosmosMetadataStore(MetadataStore):
             'provider': file_record.get('provider', existing.get('provider', '')),
             'drawing_number': file_record.get('drawing_number', existing.get('drawing_number', '')),
             'drawing_revision': file_record.get('drawing_revision', existing.get('drawing_revision', '')),
+            'revision_date': file_record.get('revision_date', existing.get('revision_date', '')),
             'drawing_title': file_record.get('drawing_title', existing.get('drawing_title', '')),
             'transaction_id': file_record.get('transaction_id', existing.get('transaction_id', '')),
             'destination_path': file_record.get('destination_path', existing.get('destination_path', '')),
@@ -983,6 +985,7 @@ class CosmosMetadataStore(MetadataStore):
             doc['provider'] = ''
             doc['drawing_number'] = ''
             doc['drawing_revision'] = ''
+            doc['revision_date'] = ''
             doc['drawing_title'] = ''
             doc['transaction_id'] = ''
             doc['destination_path'] = ''
