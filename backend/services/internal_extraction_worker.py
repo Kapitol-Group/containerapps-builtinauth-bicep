@@ -218,6 +218,7 @@ class InternalExtractionWorker:
             tender_file,
             drawing_number=extraction_result.extraction.drawing_number,
             drawing_revision=extraction_result.extraction.drawing_revision,
+            revision_date=extraction_result.extraction.revision_date,
             drawing_title=extraction_result.extraction.drawing_title,
             transaction_id=self._tender_file_transaction_id(payload, tender_file_id),
         )

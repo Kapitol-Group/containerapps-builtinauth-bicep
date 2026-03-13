@@ -28,6 +28,7 @@ class StoredTenderFile:
     status: TenderProcessStatus
     drawing_number: Optional[str] = None
     drawing_revision: Optional[str] = None
+    revision_date: Optional[str] = None
     drawing_title: Optional[str] = None
     destination_path: Optional[str] = None
     transaction_id: Optional[str] = None
@@ -146,6 +147,7 @@ class EntityStoreSubmissionService:
             status=_status_from_value(extraction_status),
             drawing_number=_normalize_optional_text(file_record.get('drawing_number')),
             drawing_revision=_normalize_optional_text(file_record.get('drawing_revision')),
+            revision_date=_normalize_optional_text(file_record.get('revision_date')),
             drawing_title=_normalize_optional_text(file_record.get('drawing_title')),
             destination_path=_normalize_optional_text(file_record.get('destination_path')),
             transaction_id=_normalize_optional_text(file_record.get('transaction_id')),
@@ -209,6 +211,7 @@ class EntityStoreSubmissionService:
                         'provider': provider,
                         'drawing_number': '',
                         'drawing_revision': '',
+                        'revision_date': '',
                         'drawing_title': '',
                         'transaction_id': '',
                         'destination_path': '',
@@ -268,6 +271,7 @@ class EntityStoreSubmissionService:
         provider: str,
         drawing_number: Optional[str],
         drawing_revision: Optional[str],
+        revision_date: Optional[str],
         drawing_title: Optional[str],
         transaction_id: Optional[str],
         last_error: Optional[str] = None,
@@ -281,6 +285,7 @@ class EntityStoreSubmissionService:
                 'provider': provider,
                 'drawing_number': drawing_number or '',
                 'drawing_revision': drawing_revision or '',
+                'revision_date': revision_date or '',
                 'drawing_title': drawing_title or '',
                 'transaction_id': transaction_id or '',
                 'destination_path': destination_path or '',
@@ -307,6 +312,7 @@ class EntityStoreSubmissionService:
         *,
         drawing_number: Optional[str],
         drawing_revision: Optional[str],
+        revision_date: Optional[str],
         drawing_title: Optional[str],
         provider: str = 'internal',
         transaction_id: Optional[str] = None,
@@ -317,6 +323,7 @@ class EntityStoreSubmissionService:
             provider=provider,
             drawing_number=drawing_number,
             drawing_revision=drawing_revision,
+            revision_date=revision_date,
             drawing_title=drawing_title,
             transaction_id=transaction_id,
             last_error=None,
@@ -336,6 +343,7 @@ class EntityStoreSubmissionService:
             provider=provider,
             drawing_number=None,
             drawing_revision=None,
+            revision_date=None,
             drawing_title=None,
             transaction_id=transaction_id,
             last_error=last_error,
@@ -354,6 +362,7 @@ class EntityStoreSubmissionService:
             provider=provider,
             drawing_number=None,
             drawing_revision=None,
+            revision_date=None,
             drawing_title=None,
             transaction_id=transaction_id,
             last_error=None,
@@ -386,6 +395,7 @@ class EntityStoreSubmissionService:
                     'status': status_key,
                     'drawing_number': tender_file.drawing_number,
                     'drawing_revision': tender_file.drawing_revision,
+                    'revision_date': tender_file.revision_date,
                     'drawing_title': tender_file.drawing_title,
                     'destination_path': tender_file.destination_path,
                     'created_at': tender_file.create_time.isoformat()

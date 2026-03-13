@@ -67,6 +67,19 @@ const formatThroughput = (filesPerMinute?: number | null) => {
     return `${filesPerMinute.toFixed(1)} files/min`;
 };
 
+const escapeCsvValue = (value: string | null | undefined) => {
+    const normalized = value ?? '';
+    return `"${normalized.replace(/"/g, '""')}"`;
+};
+
+const sanitizeFilenamePart = (value: string) => (
+    value
+        .trim()
+        .replace(/[^a-z0-9-_]+/gi, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+);
+
 const isEstimatedMetric = (source?: BatchMetricSource) => source === 'estimated';
 
 const BatchViewer: React.FC<BatchViewerProps> = ({
@@ -249,6 +262,52 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
     const metrics = progressData?.metrics;
     const canRetry = batch.status === 'failed';
 
+    const handleExportCsv = () => {
+        if (fileProgress.length === 0) {
+            return;
+        }
+
+        try {
+            const header = [
+                'Status',
+                'Filename',
+                'Drawing Number',
+                'Revision',
+                'Revision Date',
+                'Title',
+                'Updated At',
+            ];
+            const rows = fileProgress.map((file) => [
+                file.status,
+                file.filename,
+                file.drawing_number,
+                file.drawing_revision,
+                file.revision_date,
+                file.drawing_title,
+                file.updated_at,
+            ]);
+            const csvContent = [
+                header.map(escapeCsvValue).join(','),
+                ...rows.map((row) => row.map((value) => escapeCsvValue(value)).join(',')),
+            ].join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const batchLabel = sanitizeFilenamePart(batch.batch_name || batch.batch_id) || batch.batch_id;
+
+            link.href = url;
+            link.download = `${batchLabel}-file-processing-status.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Failed to export file processing status CSV:', error);
+            onError?.('Failed to export file processing status CSV');
+        }
+    };
+
     if (loading) {
         return (
             <div className="batch-viewer-loading">
@@ -418,7 +477,19 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
 
             {fileProgress.length > 0 && (
                 <div className="file-progress-section">
-                    <h3>File Processing Status</h3>
+                    <div className="section-header">
+                        <h3>File Processing Status</h3>
+                        <div className="section-actions">
+                            {loadingProgress && <p className="loading-indicator">Updating...</p>}
+                            <button
+                                type="button"
+                                className="export-button"
+                                onClick={handleExportCsv}
+                            >
+                                Export CSV
+                            </button>
+                        </div>
+                    </div>
                     <div className="file-progress-table">
                         <table>
                             <thead>
@@ -427,6 +498,7 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                                     <th>Filename</th>
                                     <th>Drawing Number</th>
                                     <th>Revision</th>
+                                    <th>Revision Date</th>
                                     <th>Title</th>
                                     <th>Updated</th>
                                 </tr>
@@ -441,6 +513,7 @@ const BatchViewer: React.FC<BatchViewerProps> = ({
                                         <td className="filename-cell">{file.filename}</td>
                                         <td>{file.drawing_number || '-'}</td>
                                         <td>{file.drawing_revision || '-'}</td>
+                                        <td>{file.revision_date || '-'}</td>
                                         <td className="title-cell">{file.drawing_title || '-'}</td>
                                         <td className="time-cell">
                                             {file.updated_at ? formatDate(file.updated_at) : '-'}

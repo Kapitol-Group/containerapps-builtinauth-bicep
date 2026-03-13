@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import unittest
 from types import SimpleNamespace
@@ -7,14 +8,8 @@ from uuid import uuid4
 
 import fitz
 
-from entity_store_transformation_client.models.tender_file import TenderFile
 from entity_store_transformation_client.models.tender_process_status import (
     TenderProcessStatus,
-)
-from entity_store_transformation_client.models.tender_project import TenderProject
-from entity_store_transformation_client.models.tender_submission import TenderSubmission
-from entity_store_transformation_client.models.title_block_validation_users import (
-    TitleBlockValidationUsers,
 )
 from services.entity_store_submission_service import SubmissionContext
 from services.internal_extraction_worker import InternalExtractionWorker
@@ -24,6 +19,20 @@ from services.vision_extractor import (
     TitleBlockExtractionSchema,
     VisionExtractionResult,
 )
+
+
+@dataclass
+class TestTenderFile:
+    original_path: str
+    original_filename: str
+    provider: str
+    status: TenderProcessStatus
+    id: str
+    drawing_number: str | None = None
+    drawing_revision: str | None = None
+    revision_date: str | None = None
+    drawing_title: str | None = None
+    transaction_id: str | None = None
 
 
 def _build_pdf() -> bytes:
@@ -37,28 +46,13 @@ def _build_pdf() -> bytes:
         document.close()
 
 
-def _build_tender_file(path: str, status: TenderProcessStatus) -> TenderFile:
-    project = TenderProject(name="Tender A", id=uuid4())
-    user = TitleBlockValidationUsers(
-        user_email="user@example.com",
-        id=uuid4(),
-    )
-    submission = TenderSubmission(
-        project_id=project,
-        reference="batch-batch-1",
-        submitted_by=user,
-        validated_by=user,
-        archive_name="n/a",
-        is_addendum=False,
-        id=uuid4(),
-    )
-    return TenderFile(
-        submission_id=submission,
+def _build_tender_file(path: str, status: TenderProcessStatus) -> TestTenderFile:
+    return TestTenderFile(
         original_path=path,
         original_filename=path.split('/')[-1],
         provider='internal',
         status=status,
-        id=uuid4(),
+        id=str(uuid4()),
     )
 
 
@@ -100,11 +94,10 @@ class FakeSubmissionStore:
         self.files_by_path = files_by_path
 
     def ensure_submission_records(self, **kwargs):
-        submission = next(iter(self.files_by_path.values())).submission_id
         return SubmissionContext(
             reference=kwargs['reference'],
-            submission_id=str(submission.id),
-            project_id=str(submission.project_id.id),
+            submission_id='submission-1',
+            project_id='project-1',
             files_by_path=self.files_by_path,
         )
 
@@ -112,6 +105,7 @@ class FakeSubmissionStore:
         tender_file.status = TenderProcessStatus.EXTRACTED
         tender_file.drawing_number = kwargs['drawing_number']
         tender_file.drawing_revision = kwargs['drawing_revision']
+        tender_file.revision_date = kwargs['revision_date']
         tender_file.drawing_title = kwargs['drawing_title']
         tender_file.transaction_id = kwargs.get('transaction_id')
         return tender_file
@@ -121,6 +115,7 @@ class FakeSubmissionStore:
         tender_file.transaction_id = kwargs.get('transaction_id')
         tender_file.drawing_number = None
         tender_file.drawing_revision = None
+        tender_file.revision_date = None
         tender_file.drawing_title = None
         return tender_file
 
@@ -214,6 +209,7 @@ class InternalExtractionWorkerTests(unittest.TestCase):
             extraction=TitleBlockExtractionSchema(
                 drawing_number='A-101',
                 drawing_revision='B',
+                revision_date='2026-03-12',
                 drawing_title='Ground Floor Plan',
             ),
             raw_response_json=json.dumps({'ok': True}),
@@ -239,6 +235,7 @@ class InternalExtractionWorkerTests(unittest.TestCase):
         worker.handle_queue_message(queue_message)
 
         self.assertEqual(tender_file.status, TenderProcessStatus.EXTRACTED)
+        self.assertEqual(tender_file.revision_date, '2026-03-12')
         self.assertEqual(worker.vision_extractor.calls, 1)
         self.assertEqual(metadata_store.batch['status'], 'completed')
         self.assertTrue(metadata_store.batch.get('completed_at'))
